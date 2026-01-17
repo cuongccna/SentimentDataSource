@@ -5,7 +5,7 @@
 # ============================================================================
 # 
 # USAGE:
-#   1. Clone code manually to /opt/sentiment-data-source
+#   1. Clone code manually to /opt/SentimentDataSource
 #   2. Run: chmod +x deploy.sh && sudo ./deploy.sh --full
 #
 # ============================================================================
@@ -20,7 +20,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-APP_DIR="/opt/sentiment-data-source"
+APP_DIR="/opt/SentimentDataSource"
 APP_USER="sentiment"
 PYTHON_VERSION="3.11"
 NODE_VERSION="20"
@@ -512,7 +512,7 @@ module.exports = {
       name: "sentiment-worker",
       script: ".venv/bin/python",
       args: "background_worker.py",
-      cwd: "/opt/sentiment-data-source",
+      cwd: "/opt/SentimentDataSource",
       instances: 1,
       autorestart: true,
       watch: false,
@@ -531,7 +531,7 @@ module.exports = {
       name: "sentiment-api",
       script: ".venv/bin/gunicorn",
       args: "-w 4 -b 0.0.0.0:5000 api_service:app",
-      cwd: "/opt/sentiment-data-source",
+      cwd: "/opt/SentimentDataSource",
       instances: 1,
       autorestart: true,
       watch: false,
@@ -551,7 +551,7 @@ module.exports = {
       name: "social-context-api",
       script: ".venv/bin/uvicorn",
       args: "fastapi_social_context:app --host 0.0.0.0 --port 8000 --workers 4",
-      cwd: "/opt/sentiment-data-source",
+      cwd: "/opt/SentimentDataSource",
       instances: 1,
       autorestart: true,
       watch: false,
