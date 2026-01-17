@@ -3,6 +3,12 @@
 # Sentiment Data Source - VPS Deployment Script
 # VPS: 72.62.192.50
 # ============================================================================
+# 
+# USAGE:
+#   1. Clone code manually to /opt/sentiment-data-source
+#   2. Run: chmod +x deploy.sh && sudo ./deploy.sh --full
+#
+# ============================================================================
 
 set -e  # Exit on error
 
@@ -14,11 +20,17 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-GITHUB_REPO="git@github.com:YOUR_USERNAME/SentimentDataSource.git"  # TODO: Update with your repo
 APP_DIR="/opt/sentiment-data-source"
 APP_USER="sentiment"
 PYTHON_VERSION="3.11"
 NODE_VERSION="20"
+
+# Database Configuration (read from .env or use defaults)
+DB_HOST="${POSTGRES_HOST:-localhost}"
+DB_PORT="${POSTGRES_PORT:-5432}"
+DB_NAME="${POSTGRES_DATABASE:-sentiment_db}"
+DB_USER="${POSTGRES_USER:-sentiment_user}"
+DB_PASSWORD="${POSTGRES_PASSWORD:-Cuongnv123456}"
 
 # ============================================================================
 # Helper Functions
@@ -47,6 +59,31 @@ check_root() {
     fi
 }
 
+check_app_dir() {
+    if [ ! -d "${APP_DIR}" ]; then
+        log_error "Application directory not found: ${APP_DIR}"
+        log_error "Please clone the repository first:"
+        log_error "  git clone <your-repo-url> ${APP_DIR}"
+        exit 1
+    fi
+}
+
+load_env() {
+    if [ -f "${APP_DIR}/.env" ]; then
+        log_info "Loading environment variables from .env..."
+        set -a
+        source ${APP_DIR}/.env
+        set +a
+        
+        # Update variables after loading
+        DB_HOST="${POSTGRES_HOST:-localhost}"
+        DB_PORT="${POSTGRES_PORT:-5432}"
+        DB_NAME="${POSTGRES_DATABASE:-sentiment_db}"
+        DB_USER="${POSTGRES_USER:-sentiment_user}"
+        DB_PASSWORD="${POSTGRES_PASSWORD:-Cuongnv123456}"
+    fi
+}
+
 # ============================================================================
 # Step 1: System Update & Dependencies
 # ============================================================================
@@ -71,6 +108,8 @@ install_system_deps() {
         python${PYTHON_VERSION}-venv \
         python${PYTHON_VERSION}-dev \
         python3-pip \
+        postgresql \
+        postgresql-contrib \
         postgresql-client \
         libpq-dev
     
@@ -108,36 +147,266 @@ create_app_user() {
         useradd -m -s /bin/bash ${APP_USER}
         log_success "User ${APP_USER} created"
     fi
-}
-
-# ============================================================================
-# Step 4: Clone/Update Repository
-# ============================================================================
-
-setup_repository() {
-    log_info "Setting up repository..."
     
-    # Create app directory
-    mkdir -p ${APP_DIR}
-    
-    if [ -d "${APP_DIR}/.git" ]; then
-        log_info "Repository exists, pulling latest changes..."
-        cd ${APP_DIR}
-        git fetch origin
-        git reset --hard origin/main
-    else
-        log_info "Cloning repository..."
-        git clone ${GITHUB_REPO} ${APP_DIR}
-    fi
-    
-    # Set ownership
+    # Set ownership of app directory
     chown -R ${APP_USER}:${APP_USER} ${APP_DIR}
-    
-    log_success "Repository setup complete"
 }
 
 # ============================================================================
-# Step 5: Setup Python Virtual Environment
+# Step 4: Setup PostgreSQL Database
+# ============================================================================
+
+setup_postgresql() {
+    log_info "Setting up PostgreSQL database..."
+    
+    # Start PostgreSQL if not running
+    systemctl start postgresql
+    systemctl enable postgresql
+    
+    # Create database user and database
+    sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" | grep -q 1 || \
+        sudo -u postgres psql -c "CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASSWORD}';"
+    
+    sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1 || \
+        sudo -u postgres psql -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
+    
+    # Grant privileges
+    sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};"
+    sudo -u postgres psql -d ${DB_NAME} -c "GRANT ALL ON SCHEMA public TO ${DB_USER};"
+    
+    log_success "PostgreSQL database configured"
+}
+
+# ============================================================================
+# Step 5: Database Migration - Create Tables
+# ============================================================================
+
+run_database_migration() {
+    log_info "Running database migrations..."
+    
+    # Create migration SQL file
+    cat > /tmp/migration.sql << 'EOSQL'
+-- ============================================================================
+-- SENTIMENT DATA SOURCE - DATABASE MIGRATION
+-- ============================================================================
+
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- ============================================================================
+-- 1. TELEGRAM SOURCES TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS telegram_sources (
+    id SERIAL PRIMARY KEY,
+    channel_id VARCHAR(255) UNIQUE NOT NULL,
+    channel_name VARCHAR(255) NOT NULL,
+    channel_type VARCHAR(50) DEFAULT 'channel',
+    reliability DECIMAL(3,2) DEFAULT 0.30,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 2. TWITTER SOURCES TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS twitter_sources (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(255) UNIQUE NOT NULL,
+    display_name VARCHAR(255),
+    account_type VARCHAR(50) DEFAULT 'influencer',
+    reliability DECIMAL(3,2) DEFAULT 0.50,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 3. REDDIT SOURCES TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS reddit_sources (
+    id SERIAL PRIMARY KEY,
+    subreddit VARCHAR(255) UNIQUE NOT NULL,
+    display_name VARCHAR(255),
+    category VARCHAR(50) DEFAULT 'crypto',
+    reliability DECIMAL(3,2) DEFAULT 0.70,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- ============================================================================
+-- 4. INGESTED MESSAGES TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS ingested_messages (
+    id SERIAL PRIMARY KEY,
+    message_id VARCHAR(255) NOT NULL,
+    source_type VARCHAR(50) NOT NULL,
+    source_id VARCHAR(255) NOT NULL,
+    asset VARCHAR(50) DEFAULT 'BTC',
+    content TEXT NOT NULL,
+    author VARCHAR(255),
+    original_timestamp TIMESTAMP WITH TIME ZONE,
+    ingested_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}',
+    UNIQUE(message_id, source_type)
+);
+
+-- Create index for faster queries
+CREATE INDEX IF NOT EXISTS idx_ingested_messages_source ON ingested_messages(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_ingested_messages_timestamp ON ingested_messages(original_timestamp);
+CREATE INDEX IF NOT EXISTS idx_ingested_messages_asset ON ingested_messages(asset);
+
+-- ============================================================================
+-- 5. SENTIMENT RESULTS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS sentiment_results (
+    id SERIAL PRIMARY KEY,
+    message_id VARCHAR(255) NOT NULL,
+    asset VARCHAR(50) DEFAULT 'BTC',
+    source_type VARCHAR(50) NOT NULL,
+    sentiment_label INTEGER CHECK (sentiment_label IN (-1, 0, 1)),
+    sentiment_confidence DECIMAL(5,4),
+    keywords_matched JSONB DEFAULT '[]',
+    processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(message_id, asset)
+);
+
+-- Create index for analysis queries
+CREATE INDEX IF NOT EXISTS idx_sentiment_results_asset ON sentiment_results(asset);
+CREATE INDEX IF NOT EXISTS idx_sentiment_results_processed ON sentiment_results(processed_at);
+CREATE INDEX IF NOT EXISTS idx_sentiment_results_label ON sentiment_results(sentiment_label);
+
+-- ============================================================================
+-- 6. AGGREGATED SIGNALS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS aggregated_signals (
+    id SERIAL PRIMARY KEY,
+    asset VARCHAR(50) DEFAULT 'BTC',
+    time_window_start TIMESTAMP WITH TIME ZONE NOT NULL,
+    time_window_end TIMESTAMP WITH TIME ZONE NOT NULL,
+    total_messages INTEGER DEFAULT 0,
+    bullish_count INTEGER DEFAULT 0,
+    bearish_count INTEGER DEFAULT 0,
+    neutral_count INTEGER DEFAULT 0,
+    weighted_sentiment DECIMAL(5,4),
+    signal_strength DECIMAL(5,4),
+    final_signal VARCHAR(20),
+    source_breakdown JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create index for time-based queries
+CREATE INDEX IF NOT EXISTS idx_aggregated_signals_asset ON aggregated_signals(asset);
+CREATE INDEX IF NOT EXISTS idx_aggregated_signals_time ON aggregated_signals(time_window_end);
+
+-- ============================================================================
+-- 7. ALERT HISTORY TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS alert_history (
+    id SERIAL PRIMARY KEY,
+    alert_type VARCHAR(50) NOT NULL,
+    asset VARCHAR(50) DEFAULT 'BTC',
+    signal VARCHAR(20),
+    message TEXT,
+    telegram_message_id VARCHAR(255),
+    sent_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    metadata JSONB DEFAULT '{}'
+);
+
+-- Create index
+CREATE INDEX IF NOT EXISTS idx_alert_history_asset ON alert_history(asset);
+CREATE INDEX IF NOT EXISTS idx_alert_history_sent ON alert_history(sent_at);
+
+-- ============================================================================
+-- 8. RISK INDICATORS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS risk_indicators (
+    id SERIAL PRIMARY KEY,
+    asset VARCHAR(50) DEFAULT 'BTC',
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    sentiment_reliability VARCHAR(20) DEFAULT 'normal',
+    fear_greed_index INTEGER,
+    fear_greed_zone VARCHAR(30) DEFAULT 'unknown',
+    social_overheat BOOLEAN DEFAULT FALSE,
+    panic_risk BOOLEAN DEFAULT FALSE,
+    fomo_risk BOOLEAN DEFAULT FALSE,
+    data_quality_overall VARCHAR(20) DEFAULT 'healthy',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create index
+CREATE INDEX IF NOT EXISTS idx_risk_indicators_asset ON risk_indicators(asset);
+CREATE INDEX IF NOT EXISTS idx_risk_indicators_timestamp ON risk_indicators(timestamp);
+
+-- ============================================================================
+-- 9. DATA QUALITY METRICS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS data_quality_metrics (
+    id SERIAL PRIMARY KEY,
+    source_type VARCHAR(50) NOT NULL,
+    check_timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    availability_status VARCHAR(20) DEFAULT 'ok',
+    time_integrity_status VARCHAR(20) DEFAULT 'ok',
+    volume_status VARCHAR(30) DEFAULT 'normal',
+    source_balance_status VARCHAR(20) DEFAULT 'normal',
+    anomaly_frequency_status VARCHAR(20) DEFAULT 'normal',
+    overall_quality VARCHAR(20) DEFAULT 'healthy',
+    metrics_detail JSONB DEFAULT '{}'
+);
+
+-- Create index
+CREATE INDEX IF NOT EXISTS idx_dq_metrics_source ON data_quality_metrics(source_type);
+CREATE INDEX IF NOT EXISTS idx_dq_metrics_timestamp ON data_quality_metrics(check_timestamp);
+
+-- ============================================================================
+-- 10. INSERT DEFAULT SOURCES (Sample data)
+-- ============================================================================
+
+-- Telegram Sources
+INSERT INTO telegram_sources (channel_id, channel_name, channel_type, reliability) VALUES
+    ('crypto_signals_001', 'Crypto Signals Pro', 'channel', 0.35),
+    ('btc_whales_002', 'BTC Whales Alert', 'channel', 0.40),
+    ('trading_view_003', 'TradingView Ideas', 'channel', 0.30),
+    ('defi_alpha_004', 'DeFi Alpha', 'group', 0.25),
+    ('market_news_005', 'Crypto Market News', 'channel', 0.35)
+ON CONFLICT (channel_id) DO NOTHING;
+
+-- Twitter Sources
+INSERT INTO twitter_sources (username, display_name, account_type, reliability) VALUES
+    ('whale_alert', 'Whale Alert', 'bot', 0.60),
+    ('documenting_btc', 'Documenting Bitcoin', 'influencer', 0.55),
+    ('bitcoin_archive', 'Bitcoin Archive', 'news', 0.50),
+    ('cryptoquant_com', 'CryptoQuant', 'analytics', 0.65),
+    ('glassnode', 'Glassnode', 'analytics', 0.70),
+    ('santaborz', 'The Moon', 'influencer', 0.40)
+ON CONFLICT (username) DO NOTHING;
+
+-- Reddit Sources
+INSERT INTO reddit_sources (subreddit, display_name, category, reliability) VALUES
+    ('bitcoin', 'Bitcoin', 'crypto', 0.70),
+    ('cryptocurrency', 'Cryptocurrency', 'crypto', 0.65),
+    ('bitcoinmarkets', 'Bitcoin Markets', 'trading', 0.75),
+    ('cryptomarkets', 'Crypto Markets', 'trading', 0.70),
+    ('ethtrader', 'ETH Trader', 'trading', 0.65)
+ON CONFLICT (subreddit) DO NOTHING;
+
+EOSQL
+
+    # Execute migration
+    PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -f /tmp/migration.sql
+    
+    if [ $? -eq 0 ]; then
+        log_success "Database migration completed successfully"
+        rm -f /tmp/migration.sql
+    else
+        log_error "Database migration failed"
+        exit 1
+    fi
+}
+
+# ============================================================================
+# Step 6: Setup Python Virtual Environment
 # ============================================================================
 
 setup_python_env() {
@@ -155,16 +424,6 @@ setup_python_env() {
     pip install --upgrade pip
     pip install -r requirements.txt
     
-    # Install additional production dependencies
-    pip install \
-        gunicorn \
-        uvicorn[standard] \
-        python-dotenv \
-        psycopg2-binary \
-        aiohttp \
-        fastapi \
-        pydantic
-    
     deactivate
     
     # Set ownership
@@ -174,7 +433,7 @@ setup_python_env() {
 }
 
 # ============================================================================
-# Step 6: Setup Environment Variables
+# Step 7: Setup Environment Variables
 # ============================================================================
 
 setup_env_file() {
@@ -183,8 +442,8 @@ setup_env_file() {
     ENV_FILE="${APP_DIR}/.env"
     
     if [ -f "${ENV_FILE}" ]; then
-        log_warn ".env file exists, creating backup..."
-        cp ${ENV_FILE} ${ENV_FILE}.backup.$(date +%Y%m%d_%H%M%S)
+        log_warn ".env file already exists, skipping..."
+        return
     fi
     
     # Create .env file from example or create new
@@ -192,24 +451,39 @@ setup_env_file() {
         cp ${APP_DIR}/.env.example ${ENV_FILE}
         log_warn "Copied .env.example to .env - Please update with actual values!"
     else
-        cat > ${ENV_FILE} << 'EOF'
-# Database Configuration
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=sentiment_db
-DB_USER=sentiment_user
-DB_PASSWORD=YOUR_DB_PASSWORD
+        cat > ${ENV_FILE} << EOF
+# =============================================================================
+# DATABASE CONFIGURATION
+# =============================================================================
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DATABASE=sentiment_db
+POSTGRES_USER=sentiment_user
+POSTGRES_PASSWORD=Cuongnv123456
 
-# Telegram Bot Configuration
+# =============================================================================
+# TELEGRAM CONFIGURATION
+# =============================================================================
+TELEGRAM_API_ID=YOUR_API_ID
+TELEGRAM_API_HASH=YOUR_API_HASH
+TELEGRAM_PHONE=+1234567890
+
+# =============================================================================
+# TELEGRAM ALERTING (Bot API for sending alerts)
+# =============================================================================
 TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
 TELEGRAM_CHANNEL_ID=YOUR_CHANNEL_ID
 
-# API Configuration
-API_HOST=0.0.0.0
-FLASK_PORT=5000
-FASTAPI_PORT=8000
+# =============================================================================
+# RATE LIMITS
+# =============================================================================
+TELEGRAM_GLOBAL_RATE_LIMIT=100
+TWITTER_GLOBAL_RATE_LIMIT=500
+REDDIT_GLOBAL_RATE_LIMIT=500
 
-# Environment
+# =============================================================================
+# ENVIRONMENT
+# =============================================================================
 ENVIRONMENT=production
 DEBUG=false
 EOF
@@ -219,11 +493,11 @@ EOF
     chown ${APP_USER}:${APP_USER} ${ENV_FILE}
     chmod 600 ${ENV_FILE}
     
-    log_success "Environment file created (remember to update values!)"
+    log_success "Environment file created"
 }
 
 # ============================================================================
-# Step 7: Setup PM2 Ecosystem
+# Step 8: Setup PM2 Ecosystem
 # ============================================================================
 
 setup_pm2() {
@@ -297,18 +571,22 @@ EOF
     # Create logs directory
     mkdir -p ${APP_DIR}/logs
     chown -R ${APP_USER}:${APP_USER} ${APP_DIR}/logs
+    chown ${APP_USER}:${APP_USER} ${APP_DIR}/ecosystem.config.js
     
     log_success "PM2 ecosystem configured"
 }
 
 # ============================================================================
-# Step 8: Setup Nginx Reverse Proxy
+# Step 9: Setup Nginx Reverse Proxy
 # ============================================================================
 
 setup_nginx() {
     log_info "Setting up Nginx reverse proxy..."
     
     cat > /etc/nginx/sites-available/sentiment-api << 'EOF'
+# Rate Limiting Zone
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+
 # Sentiment Analysis API
 upstream sentiment_api {
     server 127.0.0.1:5000;
@@ -322,9 +600,6 @@ upstream social_context_api {
 server {
     listen 80;
     server_name 72.62.192.50;
-
-    # API Rate Limiting
-    limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
 
     # Sentiment Analysis API
     location /api/v1/sentiment/ {
@@ -391,12 +666,13 @@ EOF
     # Test and reload Nginx
     nginx -t
     systemctl reload nginx
+    systemctl enable nginx
     
     log_success "Nginx configured"
 }
 
 # ============================================================================
-# Step 9: Setup Firewall
+# Step 10: Setup Firewall
 # ============================================================================
 
 setup_firewall() {
@@ -419,13 +695,16 @@ setup_firewall() {
 }
 
 # ============================================================================
-# Step 10: Start Services
+# Step 11: Start Services
 # ============================================================================
 
 start_services() {
     log_info "Starting services..."
     
     cd ${APP_DIR}
+    
+    # Stop existing PM2 processes if any
+    sudo -u ${APP_USER} pm2 delete all 2>/dev/null || true
     
     # Start PM2 as app user
     sudo -u ${APP_USER} pm2 start ecosystem.config.js
@@ -440,7 +719,34 @@ start_services() {
 }
 
 # ============================================================================
-# Step 11: Display Status
+# Step 12: Verify Deployment
+# ============================================================================
+
+verify_deployment() {
+    log_info "Verifying deployment..."
+    
+    # Wait for services to start
+    sleep 5
+    
+    # Check health endpoint
+    if curl -s http://localhost:5000/health | grep -q "healthy"; then
+        log_success "Sentiment API is healthy"
+    else
+        log_warn "Sentiment API health check failed"
+    fi
+    
+    if curl -s http://localhost:8000/health | grep -q "healthy"; then
+        log_success "Social Context API is healthy"
+    else
+        log_warn "Social Context API health check failed"
+    fi
+    
+    # Show PM2 status
+    sudo -u ${APP_USER} pm2 list
+}
+
+# ============================================================================
+# Display Status
 # ============================================================================
 
 display_status() {
@@ -452,6 +758,23 @@ display_status() {
     echo "VPS IP: 72.62.192.50"
     echo "App Directory: ${APP_DIR}"
     echo "App User: ${APP_USER}"
+    echo ""
+    echo "Database:"
+    echo "  - Host: ${DB_HOST}"
+    echo "  - Port: ${DB_PORT}"
+    echo "  - Database: ${DB_NAME}"
+    echo "  - User: ${DB_USER}"
+    echo ""
+    echo "Tables Created:"
+    echo "  - telegram_sources"
+    echo "  - twitter_sources"
+    echo "  - reddit_sources"
+    echo "  - ingested_messages"
+    echo "  - sentiment_results"
+    echo "  - aggregated_signals"
+    echo "  - alert_history"
+    echo "  - risk_indicators"
+    echo "  - data_quality_metrics"
     echo ""
     echo "API Endpoints:"
     echo "  - Sentiment Analysis: http://72.62.192.50/api/v1/sentiment/analyze"
@@ -483,17 +806,21 @@ main() {
     echo ""
     
     check_root
+    check_app_dir
     
     install_system_deps
     install_nodejs
     create_app_user
-    setup_repository
-    setup_python_env
+    setup_postgresql
     setup_env_file
+    load_env
+    run_database_migration
+    setup_python_env
     setup_pm2
     setup_nginx
     setup_firewall
     start_services
+    verify_deployment
     display_status
 }
 
@@ -505,9 +832,21 @@ case "$1" in
     --full)
         main
         ;;
+    --migrate)
+        log_info "Running database migration only..."
+        check_root
+        check_app_dir
+        load_env
+        run_database_migration
+        log_success "Migration complete"
+        ;;
     --update)
         log_info "Updating application..."
-        setup_repository
+        check_root
+        check_app_dir
+        cd ${APP_DIR}
+        git pull origin main
+        chown -R ${APP_USER}:${APP_USER} ${APP_DIR}
         setup_python_env
         sudo -u ${APP_USER} pm2 restart all
         log_success "Application updated"
@@ -523,15 +862,49 @@ case "$1" in
     --logs)
         sudo -u ${APP_USER} pm2 logs
         ;;
+    --db-status)
+        log_info "Checking database status..."
+        check_app_dir
+        load_env
+        PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -c "\dt"
+        ;;
+    --db-reset)
+        log_warn "This will DROP all tables and recreate them!"
+        read -p "Are you sure? (y/N): " confirm
+        if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+            check_root
+            check_app_dir
+            load_env
+            log_info "Dropping existing tables..."
+            PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -c "
+                DROP TABLE IF EXISTS data_quality_metrics CASCADE;
+                DROP TABLE IF EXISTS risk_indicators CASCADE;
+                DROP TABLE IF EXISTS alert_history CASCADE;
+                DROP TABLE IF EXISTS aggregated_signals CASCADE;
+                DROP TABLE IF EXISTS sentiment_results CASCADE;
+                DROP TABLE IF EXISTS ingested_messages CASCADE;
+                DROP TABLE IF EXISTS reddit_sources CASCADE;
+                DROP TABLE IF EXISTS twitter_sources CASCADE;
+                DROP TABLE IF EXISTS telegram_sources CASCADE;
+            "
+            run_database_migration
+            log_success "Database reset complete"
+        else
+            log_info "Cancelled"
+        fi
+        ;;
     *)
-        echo "Usage: $0 {--full|--update|--restart|--status|--logs}"
+        echo "Usage: $0 {--full|--migrate|--update|--restart|--status|--logs|--db-status|--db-reset}"
         echo ""
         echo "Options:"
-        echo "  --full     Full deployment (first time setup)"
-        echo "  --update   Update code and restart services"
-        echo "  --restart  Restart all services"
-        echo "  --status   Show PM2 process status"
-        echo "  --logs     Show PM2 logs"
+        echo "  --full       Full deployment (first time setup)"
+        echo "  --migrate    Run database migration only"
+        echo "  --update     Pull latest code and restart services"
+        echo "  --restart    Restart all services"
+        echo "  --status     Show PM2 process status"
+        echo "  --logs       Show PM2 logs"
+        echo "  --db-status  Show database tables"
+        echo "  --db-reset   Drop all tables and recreate (DANGEROUS!)"
         exit 1
         ;;
 esac
