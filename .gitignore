@@ -1,0 +1,31 @@
+# Ignore files
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs
+test_worker_state.json
+output.json
+sample_data.json
+
+# Build
+dist/
+build/
+*.egg-info/
+.env.example
