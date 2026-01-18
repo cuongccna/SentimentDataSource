@@ -231,11 +231,12 @@ CREATE TABLE IF NOT EXISTS telegram_sources (
     id SERIAL PRIMARY KEY,
     channel_id VARCHAR(255) UNIQUE NOT NULL,
     channel_name VARCHAR(255) NOT NULL,
-    channel_type VARCHAR(50) DEFAULT 'channel',
-    reliability DECIMAL(3,2) DEFAULT 0.30,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    asset VARCHAR(50) NOT NULL DEFAULT 'BTC',
+    channel_type VARCHAR(50) NOT NULL DEFAULT 'signal',
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    priority SMALLINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
 -- ============================================================================
@@ -244,14 +245,14 @@ CREATE TABLE IF NOT EXISTS telegram_sources (
 CREATE TABLE IF NOT EXISTS twitter_sources (
     id SERIAL PRIMARY KEY,
     account_id VARCHAR(255) UNIQUE NOT NULL,
-    handle VARCHAR(255),
-    account_type VARCHAR(50) DEFAULT 'influencer',
-    asset VARCHAR(50) DEFAULT 'BTC',
-    reliability DECIMAL(3,2) DEFAULT 0.50,
-    priority INTEGER DEFAULT 5,
-    enabled BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    handle VARCHAR(255) NOT NULL,
+    asset VARCHAR(50) NOT NULL DEFAULT 'BTC',
+    account_type VARCHAR(50) NOT NULL DEFAULT 'analyst',
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    followers_weight REAL NOT NULL DEFAULT 1.0,
+    priority SMALLINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
 -- ============================================================================
@@ -286,12 +287,13 @@ CREATE INDEX IF NOT EXISTS idx_twitter_messages_asset ON twitter_messages(asset)
 CREATE TABLE IF NOT EXISTS reddit_sources (
     id SERIAL PRIMARY KEY,
     subreddit VARCHAR(255) UNIQUE NOT NULL,
-    display_name VARCHAR(255),
-    category VARCHAR(50) DEFAULT 'crypto',
-    reliability DECIMAL(3,2) DEFAULT 0.70,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    asset VARCHAR(50) NOT NULL DEFAULT 'BTC',
+    role VARCHAR(50) NOT NULL DEFAULT 'discussion',
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    max_posts_per_run INTEGER NOT NULL DEFAULT 100,
+    priority SMALLINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
 -- ============================================================================
@@ -300,77 +302,89 @@ CREATE TABLE IF NOT EXISTS reddit_sources (
 CREATE TABLE IF NOT EXISTS ingested_messages (
     id SERIAL PRIMARY KEY,
     message_id VARCHAR(255) NOT NULL,
-    source_type VARCHAR(50) NOT NULL,
-    source_id VARCHAR(255) NOT NULL,
-    asset VARCHAR(50) DEFAULT 'BTC',
-    content TEXT NOT NULL,
-    author VARCHAR(255),
-    original_timestamp TIMESTAMP WITH TIME ZONE,
-    ingested_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    metadata JSONB DEFAULT '{}',
-    UNIQUE(message_id, source_type)
+    source VARCHAR(50) NOT NULL,
+    source_id INTEGER,
+    source_name VARCHAR(255),
+    asset VARCHAR(50) NOT NULL DEFAULT 'BTC',
+    text TEXT NOT NULL,
+    event_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    fingerprint VARCHAR(255) NOT NULL,
+    engagement_weight REAL DEFAULT 0,
+    author_weight REAL DEFAULT 0,
+    velocity REAL DEFAULT 0,
+    source_reliability REAL NOT NULL,
+    raw_data JSONB,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE(message_id, source)
 );
 
 -- Create index for faster queries
-CREATE INDEX IF NOT EXISTS idx_ingested_messages_source ON ingested_messages(source_type, source_id);
-CREATE INDEX IF NOT EXISTS idx_ingested_messages_timestamp ON ingested_messages(original_timestamp);
+CREATE INDEX IF NOT EXISTS idx_ingested_messages_source ON ingested_messages(source, source_id);
+CREATE INDEX IF NOT EXISTS idx_ingested_messages_event_time ON ingested_messages(event_time);
 CREATE INDEX IF NOT EXISTS idx_ingested_messages_asset ON ingested_messages(asset);
+CREATE INDEX IF NOT EXISTS idx_ingested_messages_fingerprint ON ingested_messages(fingerprint);
 
+-- ============================================================================
+-- 5. SENTIMENT RESULTS TABLE
+-- ============================================================================
 -- ============================================================================
 -- 5. SENTIMENT RESULTS TABLE
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS sentiment_results (
     id SERIAL PRIMARY KEY,
-    message_id VARCHAR(255) NOT NULL,
-    asset VARCHAR(50) DEFAULT 'BTC',
-    source_type VARCHAR(50) NOT NULL,
-    sentiment_label INTEGER CHECK (sentiment_label IN (-1, 0, 1)),
-    sentiment_confidence DECIMAL(5,4),
-    keywords_matched JSONB DEFAULT '[]',
-    processed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    UNIQUE(message_id, asset)
+    message_id INTEGER,
+    asset VARCHAR(50) NOT NULL,
+    sentiment_score REAL NOT NULL,
+    sentiment_label VARCHAR(20) NOT NULL,
+    confidence REAL NOT NULL,
+    weighted_score REAL NOT NULL,
+    signal_strength REAL NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
 -- Create index for analysis queries
 CREATE INDEX IF NOT EXISTS idx_sentiment_results_asset ON sentiment_results(asset);
-CREATE INDEX IF NOT EXISTS idx_sentiment_results_processed ON sentiment_results(processed_at);
+CREATE INDEX IF NOT EXISTS idx_sentiment_results_created ON sentiment_results(created_at);
 CREATE INDEX IF NOT EXISTS idx_sentiment_results_label ON sentiment_results(sentiment_label);
+CREATE INDEX IF NOT EXISTS idx_sentiment_results_message ON sentiment_results(message_id);
 
 -- ============================================================================
 -- 6. AGGREGATED SIGNALS TABLE
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS aggregated_signals (
     id SERIAL PRIMARY KEY,
-    asset VARCHAR(50) DEFAULT 'BTC',
-    time_window_start TIMESTAMP WITH TIME ZONE NOT NULL,
-    time_window_end TIMESTAMP WITH TIME ZONE NOT NULL,
-    total_messages INTEGER DEFAULT 0,
-    bullish_count INTEGER DEFAULT 0,
-    bearish_count INTEGER DEFAULT 0,
-    neutral_count INTEGER DEFAULT 0,
-    weighted_sentiment DECIMAL(5,4),
-    signal_strength DECIMAL(5,4),
-    final_signal VARCHAR(20),
-    source_breakdown JSONB DEFAULT '{}',
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    asset VARCHAR(50) NOT NULL,
+    window_start TIMESTAMP WITH TIME ZONE NOT NULL,
+    window_end TIMESTAMP WITH TIME ZONE NOT NULL,
+    total_messages INTEGER NOT NULL,
+    bullish_count INTEGER NOT NULL DEFAULT 0,
+    bearish_count INTEGER NOT NULL DEFAULT 0,
+    neutral_count INTEGER NOT NULL DEFAULT 0,
+    avg_sentiment REAL NOT NULL,
+    weighted_sentiment REAL NOT NULL,
+    signal_type VARCHAR(20) NOT NULL,
+    signal_strength REAL NOT NULL,
+    velocity REAL NOT NULL DEFAULT 0,
+    sources_breakdown JSONB,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
 -- Create index for time-based queries
 CREATE INDEX IF NOT EXISTS idx_aggregated_signals_asset ON aggregated_signals(asset);
-CREATE INDEX IF NOT EXISTS idx_aggregated_signals_time ON aggregated_signals(time_window_end);
+CREATE INDEX IF NOT EXISTS idx_aggregated_signals_window ON aggregated_signals(window_end);
 
 -- ============================================================================
 -- 7. ALERT HISTORY TABLE
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS alert_history (
     id SERIAL PRIMARY KEY,
+    asset VARCHAR(50) NOT NULL,
     alert_type VARCHAR(50) NOT NULL,
-    asset VARCHAR(50) DEFAULT 'BTC',
-    signal VARCHAR(20),
-    message TEXT,
+    signal_id INTEGER,
+    message TEXT NOT NULL,
     telegram_message_id VARCHAR(255),
-    sent_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    metadata JSONB DEFAULT '{}'
+    sent_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    success BOOLEAN NOT NULL DEFAULT TRUE
 );
 
 -- Create index
@@ -382,10 +396,9 @@ CREATE INDEX IF NOT EXISTS idx_alert_history_sent ON alert_history(sent_at);
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS risk_indicators (
     id SERIAL PRIMARY KEY,
-    asset VARCHAR(50) DEFAULT 'BTC',
-    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    asset VARCHAR(50) NOT NULL DEFAULT 'BTC',
     sentiment_reliability VARCHAR(20) DEFAULT 'normal',
-    fear_greed_index INTEGER,
+    fear_greed_index REAL,
     fear_greed_zone VARCHAR(30) DEFAULT 'unknown',
     social_overheat BOOLEAN DEFAULT FALSE,
     panic_risk BOOLEAN DEFAULT FALSE,
@@ -396,7 +409,7 @@ CREATE TABLE IF NOT EXISTS risk_indicators (
 
 -- Create index
 CREATE INDEX IF NOT EXISTS idx_risk_indicators_asset ON risk_indicators(asset);
-CREATE INDEX IF NOT EXISTS idx_risk_indicators_timestamp ON risk_indicators(timestamp);
+CREATE INDEX IF NOT EXISTS idx_risk_indicators_created ON risk_indicators(created_at);
 
 -- ============================================================================
 -- 9. DATA QUALITY METRICS TABLE
@@ -404,72 +417,97 @@ CREATE INDEX IF NOT EXISTS idx_risk_indicators_timestamp ON risk_indicators(time
 CREATE TABLE IF NOT EXISTS data_quality_metrics (
     id SERIAL PRIMARY KEY,
     source_type VARCHAR(50) NOT NULL,
-    check_timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     availability_status VARCHAR(20) DEFAULT 'ok',
     time_integrity_status VARCHAR(20) DEFAULT 'ok',
     volume_status VARCHAR(30) DEFAULT 'normal',
-    source_balance_status VARCHAR(20) DEFAULT 'normal',
-    anomaly_frequency_status VARCHAR(20) DEFAULT 'normal',
     overall_quality VARCHAR(20) DEFAULT 'healthy',
-    metrics_detail JSONB DEFAULT '{}'
+    metrics_detail JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Create index
 CREATE INDEX IF NOT EXISTS idx_dq_metrics_source ON data_quality_metrics(source_type);
-CREATE INDEX IF NOT EXISTS idx_dq_metrics_timestamp ON data_quality_metrics(check_timestamp);
+CREATE INDEX IF NOT EXISTS idx_dq_metrics_created ON data_quality_metrics(created_at);
 
 -- ============================================================================
--- 10. INSERT DEFAULT SOURCES (Sample data)
+-- 10. INSERT DEFAULT SOURCES (18 Telegram, 21 Twitter, 15 Reddit)
 -- ============================================================================
 
--- Telegram Sources (crypto channels)
-INSERT INTO telegram_sources (channel_id, channel_name, channel_type, reliability) VALUES
-    ('WuBlockchainTG', 'WuBlockchain', 'channel', 0.50),
-    ('BitcoinMagazine', 'Bitcoin Magazine', 'channel', 0.55),
-    ('Cointelegraph', 'Cointelegraph', 'channel', 0.50),
-    ('CryptoComAnn', 'Crypto.com Announcements', 'channel', 0.45),
-    ('whale_alert_io', 'Whale Alert', 'channel', 0.60),
-    ('BTCTurkPro', 'BTCTurk Pro', 'channel', 0.40),
-    ('binaborce_ann', 'Binance Announcements', 'channel', 0.55),
-    ('OKX_Announcements', 'OKX Announcements', 'channel', 0.50),
-    ('CoinGecko', 'CoinGecko', 'channel', 0.45),
-    ('TheBlockBeats', 'TheBlockBeats', 'channel', 0.45)
+-- Telegram Sources (18 crypto channels) - matching local database
+INSERT INTO telegram_sources (channel_id, channel_name, asset, channel_type, enabled, priority) VALUES
+    -- Analytics & Alerts (Priority 8)
+    ('-1001524675531', 'Glassnode Alerts', 'BTC', 'analytics', TRUE, 8),
+    ('-1001157066728', 'Coin Bureau', 'BTC', 'education', TRUE, 8),
+    ('-1001382978349', 'The Block', 'BTC', 'news', TRUE, 8),
+    -- Analytics (Priority 7)
+    ('-1001221690015', 'Messari', 'BTC', 'analytics', TRUE, 7),
+    ('-1001487169582', 'Santiment', 'BTC', 'analytics', TRUE, 7),
+    ('-1001413670564', 'Cointelegraph', 'BTC', 'news', TRUE, 7),
+    ('-1001296358563', 'CoinDesk', 'BTC', 'news', TRUE, 7),
+    -- News (Priority 6)
+    ('-1001225143879', 'Decrypt', 'BTC', 'news', TRUE, 6),
+    ('-1001247280084', 'Bitcoin Archive', 'BTC', 'news', TRUE, 6),
+    ('-1001382141207', 'Crypto Panic', 'BTC', 'aggregator', TRUE, 6),
+    -- Whale Trackers (Priority 5)
+    ('-1001309043988', 'Whale Alert', 'BTC', 'whale', TRUE, 5),
+    ('-1001145462707', 'WhaleBot Alerts', 'BTC', 'whale', TRUE, 5),
+    -- Market Data (Priority 4)
+    ('-1001246846205', 'CryptoQuant Alert', 'BTC', 'analysis', TRUE, 4),
+    ('-1001909196609', 'Crypto Price', 'BTC', 'price', TRUE, 4),
+    ('-1001193342710', 'Bitcoin', 'BTC', 'news', TRUE, 4),
+    ('-1001260161873', 'Binance Futures Liquidations', 'BTC', 'liquidation', TRUE, 4),
+    -- Others (Priority 3)
+    ('-1001343715577', 'CryptoQuant', 'BTC', 'analysis', TRUE, 3),
+    ('-1001234079543', 'BeInCrypto Vietnam', 'BTC', 'news', TRUE, 3)
 ON CONFLICT (channel_id) DO NOTHING;
 
--- Twitter Sources (21 crypto accounts with priority)
-INSERT INTO twitter_sources (account_id, handle, account_type, asset, priority, enabled) VALUES
-    ('whale_alert', '@whale_alert', 'whale_tracker', 'BTC', 10, TRUE),
-    ('BitcoinMagazine', '@BitcoinMagazine', 'news', 'BTC', 9, TRUE),
-    ('Cointelegraph', '@Cointelegraph', 'news', 'BTC', 9, TRUE),
-    ('BitcoinFear', '@BitcoinFear', 'analytics', 'BTC', 8, TRUE),
-    ('CoinDesk', '@CoinDesk', 'news', 'BTC', 8, TRUE),
-    ('glassnode', '@glassnode', 'analytics', 'BTC', 8, TRUE),
-    ('TheBlock__', '@TheBlock__', 'news', 'BTC', 7, TRUE),
-    ('CryptoQuant_News', '@CryptoQuant_News', 'analytics', 'BTC', 7, TRUE),
-    ('WhaleChart', '@WhaleChart', 'whale_tracker', 'BTC', 7, TRUE),
-    ('DocumentingBTC', '@DocumentingBTC', 'education', 'BTC', 7, TRUE),
-    ('WuBlockchain', '@WuBlockchain', 'news', 'BTC', 6, TRUE),
-    ('100trillionUSD', '@100trillionUSD', 'analyst', 'BTC', 6, TRUE),
-    ('WClementeIII', '@WClementeIII', 'analyst', 'BTC', 6, TRUE),
-    ('CryptoDonAlt', '@CryptoDonAlt', 'trader', 'BTC', 5, TRUE),
-    ('Bybit_Official', '@Bybit_Official', 'exchange', 'BTC', 5, TRUE),
-    ('OKX', '@OKX', 'exchange', 'BTC', 5, TRUE),
-    ('binance', '@binance', 'exchange', 'BTC', 5, TRUE),
-    ('coinbase', '@coinbase', 'exchange', 'BTC', 5, TRUE),
-    ('CryptoGodJohn', '@CryptoGodJohn', 'trader', 'BTC', 4, TRUE),
-    ('PlanB', '@PlanB', 'analyst', 'BTC', 4, TRUE),
-    ('santaboris', '@santaboris', 'analyst', 'BTC', 4, TRUE)
+-- Twitter Sources (21 crypto accounts with priority) - matching local database
+INSERT INTO twitter_sources (account_id, handle, asset, account_type, enabled, priority) VALUES
+    ('whale_alert', '@whale_alert', 'BTC', 'whale_tracker', TRUE, 10),
+    ('BitcoinMagazine', '@BitcoinMagazine', 'BTC', 'news', TRUE, 9),
+    ('Cointelegraph', '@Cointelegraph', 'BTC', 'news', TRUE, 9),
+    ('BitcoinFear', '@BitcoinFear', 'BTC', 'analytics', TRUE, 8),
+    ('CoinDesk', '@CoinDesk', 'BTC', 'news', TRUE, 8),
+    ('glassnode', '@glassnode', 'BTC', 'analytics', TRUE, 8),
+    ('TheBlock__', '@TheBlock__', 'BTC', 'news', TRUE, 7),
+    ('CryptoQuant_News', '@CryptoQuant_News', 'BTC', 'analytics', TRUE, 7),
+    ('WhaleChart', '@WhaleChart', 'BTC', 'whale_tracker', TRUE, 7),
+    ('DocumentingBTC', '@DocumentingBTC', 'BTC', 'education', TRUE, 7),
+    ('WuBlockchain', '@WuBlockchain', 'BTC', 'news', TRUE, 6),
+    ('100trillionUSD', '@100trillionUSD', 'BTC', 'analyst', TRUE, 6),
+    ('WClementeIII', '@WClementeIII', 'BTC', 'analyst', TRUE, 6),
+    ('CryptoDonAlt', '@CryptoDonAlt', 'BTC', 'trader', TRUE, 5),
+    ('Bybit_Official', '@Bybit_Official', 'BTC', 'exchange', TRUE, 5),
+    ('OKX', '@OKX', 'BTC', 'exchange', TRUE, 5),
+    ('binance', '@binance', 'BTC', 'exchange', TRUE, 5),
+    ('coinbase', '@coinbase', 'BTC', 'exchange', TRUE, 5),
+    ('CryptoGodJohn', '@CryptoGodJohn', 'BTC', 'trader', TRUE, 4),
+    ('PlanB', '@PlanB', 'BTC', 'analyst', TRUE, 4),
+    ('santaboris', '@santaboris', 'BTC', 'analyst', TRUE, 4)
 ON CONFLICT (account_id) DO UPDATE SET 
     priority = EXCLUDED.priority,
     enabled = EXCLUDED.enabled;
 
--- Reddit Sources
-INSERT INTO reddit_sources (subreddit, display_name, category, reliability) VALUES
-    ('bitcoin', 'Bitcoin', 'crypto', 0.70),
-    ('cryptocurrency', 'Cryptocurrency', 'crypto', 0.65),
-    ('bitcoinmarkets', 'Bitcoin Markets', 'trading', 0.75),
-    ('cryptomarkets', 'Crypto Markets', 'trading', 0.70),
-    ('ethtrader', 'ETH Trader', 'trading', 0.65)
+-- Reddit Sources (15 subreddits) - matching local database
+INSERT INTO reddit_sources (subreddit, asset, role, enabled, max_posts_per_run, priority) VALUES
+    -- Primary (Priority 5-6)
+    ('CryptoTechnology', 'BTC', 'technical', TRUE, 50, 6),
+    ('Bitcoin', 'BTC', 'discussion', TRUE, 100, 5),
+    ('BitcoinMarkets', 'BTC', 'market', TRUE, 100, 5),
+    ('ethfinance', 'ETH', 'discussion', TRUE, 50, 5),
+    ('CryptoCurrencyTrading', 'BTC', 'trading', TRUE, 40, 5),
+    -- Secondary (Priority 4)
+    ('CryptoCurrency', 'BTC', 'discussion', TRUE, 100, 4),
+    ('defi', 'BTC', 'discussion', TRUE, 30, 4),
+    ('BitcoinMining', 'BTC', 'mining', TRUE, 20, 4),
+    -- Others (Priority 2-3)
+    ('btc', 'BTC', 'discussion', TRUE, 50, 3),
+    ('SatoshiStreetBets', 'BTC', 'trading', TRUE, 30, 3),
+    ('CryptoMarkets', 'BTC', 'market', TRUE, 50, 3),
+    ('BitcoinBeginners', 'BTC', 'education', TRUE, 30, 3),
+    ('Bitcoincash', 'BCH', 'discussion', TRUE, 20, 2),
+    ('CryptoMoonShots', 'BTC', 'speculation', TRUE, 20, 2),
+    ('altcoin', 'BTC', 'discussion', TRUE, 20, 2)
 ON CONFLICT (subreddit) DO NOTHING;
 
 EOSQL
@@ -876,8 +914,9 @@ display_status() {
     echo "  - User: ${DB_USER}"
     echo ""
     echo "Tables Created:"
-    echo "  - telegram_sources"
-    echo "  - twitter_sources"
+    echo "  - telegram_sources (10 channels)"
+    echo "  - twitter_sources (21 accounts)"
+    echo "  - twitter_messages"
     echo "  - reddit_sources"
     echo "  - ingested_messages"
     echo "  - sentiment_results"
@@ -885,6 +924,12 @@ display_status() {
     echo "  - alert_history"
     echo "  - risk_indicators"
     echo "  - data_quality_metrics"
+    echo ""
+    echo "Data Collection Settings:"
+    echo "  - Twitter: 5 accounts/batch, 30 min interval, 5s delay/request"
+    echo "  - Telegram: 20s interval"
+    echo "  - Reddit: 5 min interval"
+    echo "  - Proxy: SOCKS5 enabled for Twitter"
     echo ""
     echo "API Endpoints:"
     echo "  - Sentiment Analysis: http://72.62.192.50/api/v1/sentiment/analyze"
@@ -895,10 +940,14 @@ display_status() {
     echo "PM2 Commands:"
     echo "  - sudo -u ${APP_USER} pm2 list"
     echo "  - sudo -u ${APP_USER} pm2 logs"
+    echo "  - sudo -u ${APP_USER} pm2 logs sentiment-worker"
     echo "  - sudo -u ${APP_USER} pm2 monit"
     echo "  - sudo -u ${APP_USER} pm2 restart all"
     echo ""
-    echo -e "${YELLOW}⚠️  IMPORTANT: Update ${APP_DIR}/.env with actual values!${NC}"
+    echo -e "${YELLOW}⚠️  IMPORTANT:${NC}"
+    echo "  1. Update ${APP_DIR}/.env with Telegram API credentials"
+    echo "  2. Copy telegram session file to VPS"
+    echo "  3. Verify proxy connectivity from VPS"
     echo ""
     echo "============================================================================"
 }
