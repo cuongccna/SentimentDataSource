@@ -174,22 +174,28 @@ class PostgreSQLDatabase(DatabaseInterface):
         try:
             cursor = self.conn.cursor()
             
+            # Get message_id as integer (reference to ingested_messages.id)
+            message_id = kwargs.get("message_id")
+            if isinstance(message_id, str):
+                # Try to extract numeric ID or use hash
+                try:
+                    message_id = int(message_id)
+                except ValueError:
+                    message_id = abs(hash(message_id)) % (10 ** 9)  # Convert to int
+            
             cursor.execute("""
                 INSERT INTO sentiment_results 
-                (message_id, asset, source_type, sentiment_label, sentiment_confidence, keywords_matched)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (message_id, asset) DO UPDATE SET
-                    sentiment_label = EXCLUDED.sentiment_label,
-                    sentiment_confidence = EXCLUDED.sentiment_confidence,
-                    processed_at = NOW()
+                (message_id, asset, sentiment_score, sentiment_label, confidence, weighted_score, signal_strength)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
-                kwargs.get("message_id", ""),
+                message_id,
                 kwargs.get("asset", "BTC"),
-                kwargs.get("source", ""),
-                kwargs.get("sentiment_label", 0),
-                kwargs.get("sentiment_confidence", 0.5),
-                json.dumps(kwargs.get("keywords_matched", []))
+                kwargs.get("sentiment_score", 0.0),
+                kwargs.get("sentiment_label", "neutral"),
+                kwargs.get("confidence", 0.5),
+                kwargs.get("weighted_score", 0.0),
+                kwargs.get("signal_strength", 0.0)
             ))
             
             result = cursor.fetchone()
