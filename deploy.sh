@@ -25,6 +25,9 @@ APP_USER="sentiment"
 PYTHON_VERSION="3.11"
 NODE_VERSION="20"
 
+# Ensure PostgreSQL binaries are in PATH
+export PATH=$PATH:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:/usr/bin
+
 # Database Configuration (read from .env or use defaults)
 DB_HOST="${POSTGRES_HOST:-localhost}"
 DB_PORT="${POSTGRES_PORT:-5432}"
@@ -159,20 +162,28 @@ create_app_user() {
 setup_postgresql() {
     log_info "Setting up PostgreSQL database..."
     
+    # Find psql binary
+    PSQL_BIN=$(which psql 2>/dev/null || find /usr/lib/postgresql -name psql 2>/dev/null | head -1)
+    if [ -z "$PSQL_BIN" ]; then
+        log_error "psql not found. Please ensure postgresql-client is installed."
+        exit 1
+    fi
+    log_info "Using psql: $PSQL_BIN"
+    
     # Start PostgreSQL if not running
     systemctl start postgresql
     systemctl enable postgresql
     
     # Create database user and database
-    sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" | grep -q 1 || \
-        sudo -u postgres psql -c "CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASSWORD}';"
+    sudo -u postgres $PSQL_BIN -tc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" | grep -q 1 || \
+        sudo -u postgres $PSQL_BIN -c "CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASSWORD}';"
     
-    sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1 || \
-        sudo -u postgres psql -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
+    sudo -u postgres $PSQL_BIN -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1 || \
+        sudo -u postgres $PSQL_BIN -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
     
     # Grant privileges
-    sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};"
-    sudo -u postgres psql -d ${DB_NAME} -c "GRANT ALL ON SCHEMA public TO ${DB_USER};"
+    sudo -u postgres $PSQL_BIN -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};"
+    sudo -u postgres $PSQL_BIN -d ${DB_NAME} -c "GRANT ALL ON SCHEMA public TO ${DB_USER};"
     
     log_success "PostgreSQL database configured"
 }
@@ -394,7 +405,9 @@ ON CONFLICT (subreddit) DO NOTHING;
 EOSQL
 
     # Execute migration
-    PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -f /tmp/migration.sql
+    # Find psql binary
+    PSQL_BIN=$(which psql 2>/dev/null || find /usr/lib/postgresql -name psql 2>/dev/null | head -1)
+    PGPASSWORD="${DB_PASSWORD}" $PSQL_BIN -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -f /tmp/migration.sql
     
     if [ $? -eq 0 ]; then
         log_success "Database migration completed successfully"
@@ -866,7 +879,8 @@ case "$1" in
         log_info "Checking database status..."
         check_app_dir
         load_env
-        PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -c "\dt"
+        PSQL_BIN=$(which psql 2>/dev/null || find /usr/lib/postgresql -name psql 2>/dev/null | head -1)
+        PGPASSWORD="${DB_PASSWORD}" $PSQL_BIN -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -c "\dt"
         ;;
     --db-reset)
         log_warn "This will DROP all tables and recreate them!"
@@ -875,8 +889,9 @@ case "$1" in
             check_root
             check_app_dir
             load_env
+            PSQL_BIN=$(which psql 2>/dev/null || find /usr/lib/postgresql -name psql 2>/dev/null | head -1)
             log_info "Dropping existing tables..."
-            PGPASSWORD="${DB_PASSWORD}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -c "
+            PGPASSWORD="${DB_PASSWORD}" $PSQL_BIN -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -c "
                 DROP TABLE IF EXISTS data_quality_metrics CASCADE;
                 DROP TABLE IF EXISTS risk_indicators CASCADE;
                 DROP TABLE IF EXISTS alert_history CASCADE;
