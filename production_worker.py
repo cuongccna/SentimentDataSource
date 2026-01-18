@@ -998,7 +998,13 @@ class TelegramSourceCollector(SourceCollector):
             logger.warning("Telegram collector: missing credentials or Telethon not installed")
     
     def _load_configured_channels(self):
-        """Load enabled channels from telegram_sources table."""
+        """Load enabled AND healthy channels from telegram_sources table.
+        
+        HEALTH CHECK GATEKEEPING:
+        Only loads channels where:
+        - enabled = TRUE
+        - status = 'alive' OR status IS NULL (for backward compatibility)
+        """
         try:
             conn = psycopg2.connect(
                 host=os.getenv("POSTGRES_HOST", "localhost"),
@@ -1009,28 +1015,43 @@ class TelegramSourceCollector(SourceCollector):
             )
             cursor = conn.cursor()
             
+            # CRITICAL: Only ingest from ALIVE channels
+            # Allow NULL status for backward compatibility (before health worker runs)
             cursor.execute("""
-                SELECT channel_id, channel_name, channel_type, priority 
+                SELECT channel_id, channel_name, channel_type, priority, 
+                       COALESCE(status, 'unknown') as status
                 FROM telegram_sources 
                 WHERE enabled = TRUE 
+                  AND (status IS NULL OR status = 'alive' OR status = 'unknown')
                 ORDER BY priority DESC
             """)
             
             self.configured_channels = []
+            alive_count = 0
+            unknown_count = 0
+            
             for row in cursor.fetchall():
+                status = row[4]
                 self.configured_channels.append({
                     "channel_id": row[0],
                     "channel_name": row[1],
                     "channel_type": row[2],
-                    "priority": row[3]
+                    "priority": row[3],
+                    "status": status
                 })
+                if status == 'alive':
+                    alive_count += 1
+                else:
+                    unknown_count += 1
             
             cursor.close()
             conn.close()
             
             logger.info(f"Loaded {len(self.configured_channels)} channels from telegram_sources")
+            logger.info(f"  - {alive_count} ALIVE, {unknown_count} UNKNOWN/NULL (pending health check)")
             for ch in self.configured_channels:
-                logger.info(f"  - {ch['channel_name']} ({ch['channel_id']}) [priority={ch['priority']}]")
+                status_icon = "✅" if ch['status'] == 'alive' else "❓"
+                logger.info(f"  {status_icon} {ch['channel_name']} ({ch['channel_id']}) [priority={ch['priority']}]")
                 
         except Exception as e:
             logger.error(f"Failed to load telegram sources: {e}")

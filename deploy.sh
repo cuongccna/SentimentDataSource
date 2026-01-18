@@ -255,19 +255,29 @@ DROP TABLE IF EXISTS twitter_sources CASCADE;
 DROP TABLE IF EXISTS telegram_sources CASCADE;
 
 -- ============================================================================
--- 1. TELEGRAM SOURCES TABLE
+-- 1. TELEGRAM SOURCES TABLE (with health check columns)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS telegram_sources (
     id SERIAL PRIMARY KEY,
     channel_id VARCHAR(255) UNIQUE NOT NULL,
     channel_name VARCHAR(255) NOT NULL,
+    username VARCHAR(100),  -- Telegram username (e.g., whale_alert_io)
     asset VARCHAR(50) NOT NULL DEFAULT 'BTC',
     channel_type VARCHAR(50) NOT NULL DEFAULT 'signal',
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     priority SMALLINT NOT NULL DEFAULT 0,
+    -- Health check columns (for telegram_health_worker.py)
+    status VARCHAR(20) DEFAULT 'unknown',
+    error_count INTEGER DEFAULT 0,
+    last_message_at TIMESTAMP WITH TIME ZONE,
+    last_checked_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
+
+-- Create index for health status queries
+CREATE INDEX IF NOT EXISTS idx_telegram_sources_status ON telegram_sources(status);
+CREATE INDEX IF NOT EXISTS idx_telegram_sources_enabled_status ON telegram_sources(enabled, status);
 
 -- ============================================================================
 -- 2. TWITTER SOURCES TABLE (with priority for batch rotation)
@@ -496,31 +506,31 @@ ON CONFLICT (symbol) DO NOTHING;
 -- ============================================================================
 
 -- Telegram Sources (18 crypto channels) - matching local database
-INSERT INTO telegram_sources (channel_id, channel_name, asset, channel_type, enabled, priority) VALUES
+INSERT INTO telegram_sources (channel_id, channel_name, username, asset, channel_type, enabled, priority) VALUES
     -- Analytics & Alerts (Priority 8)
-    ('-1001524675531', 'Glassnode Alerts', 'BTC', 'analytics', TRUE, 8),
-    ('-1001157066728', 'Coin Bureau', 'BTC', 'education', TRUE, 8),
-    ('-1001382978349', 'The Block', 'BTC', 'news', TRUE, 8),
+    ('-1001524675531', 'Glassnode Alerts', 'glassnodealerts', 'BTC', 'analytics', TRUE, 8),
+    ('-1001157066728', 'Coin Bureau', 'coinbureau', 'BTC', 'education', TRUE, 8),
+    ('-1001382978349', 'The Block', 'theblock', 'BTC', 'news', TRUE, 8),
     -- Analytics (Priority 7)
-    ('-1001221690015', 'Messari', 'BTC', 'analytics', TRUE, 7),
-    ('-1001487169582', 'Santiment', 'BTC', 'analytics', TRUE, 7),
-    ('-1001413670564', 'Cointelegraph', 'BTC', 'news', TRUE, 7),
-    ('-1001296358563', 'CoinDesk', 'BTC', 'news', TRUE, 7),
+    ('-1001221690015', 'Messari', 'messaricrypto', 'BTC', 'analytics', TRUE, 7),
+    ('-1001487169582', 'Santiment', 'santimentfeed', 'BTC', 'analytics', TRUE, 7),
+    ('-1001413670564', 'Cointelegraph', 'cointelegraph', 'BTC', 'news', TRUE, 7),
+    ('-1001296358563', 'CoinDesk', 'CoinDesk', 'BTC', 'news', TRUE, 7),
     -- News (Priority 6)
-    ('-1001225143879', 'Decrypt', 'BTC', 'news', TRUE, 6),
-    ('-1001247280084', 'Bitcoin Archive', 'BTC', 'news', TRUE, 6),
-    ('-1001382141207', 'Crypto Panic', 'BTC', 'aggregator', TRUE, 6),
+    ('-1001225143879', 'Decrypt', 'decryptco', 'BTC', 'news', TRUE, 6),
+    ('-1001247280084', 'Bitcoin Archive', 'bitcoinarchive', 'BTC', 'news', TRUE, 6),
+    ('-1001382141207', 'Crypto Panic', 'cryptopanic', 'BTC', 'aggregator', TRUE, 6),
     -- Whale Trackers (Priority 5)
-    ('-1001309043988', 'Whale Alert', 'BTC', 'whale', TRUE, 5),
-    ('-1001145462707', 'WhaleBot Alerts', 'BTC', 'whale', TRUE, 5),
+    ('-1001309043988', 'Whale Alert', 'whale_alert_io', 'BTC', 'whale', TRUE, 5),
+    ('-1001145462707', 'WhaleBot Alerts', 'WhaleBotAlerts', 'BTC', 'whale', TRUE, 5),
     -- Market Data (Priority 4)
-    ('-1001246846205', 'CryptoQuant Alert', 'BTC', 'analysis', TRUE, 4),
-    ('-1001909196609', 'Crypto Price', 'BTC', 'price', TRUE, 4),
-    ('-1001193342710', 'Bitcoin', 'BTC', 'news', TRUE, 4),
-    ('-1001260161873', 'Binance Futures Liquidations', 'BTC', 'liquidation', TRUE, 4),
+    ('-1001246846205', 'CryptoQuant Alert', 'CryptoQuantAlert', 'BTC', 'analysis', TRUE, 4),
+    ('-1001909196609', 'Crypto Price', 'CryptoPrice', 'BTC', 'price', TRUE, 4),
+    ('-1001193342710', 'Bitcoin', 'Bitcoin', 'BTC', 'news', TRUE, 4),
+    ('-1001260161873', 'Binance Futures Liquidations', 'BinanceFuturesLiquidations', 'BTC', 'liquidation', TRUE, 4),
     -- Others (Priority 3)
-    ('-1001343715577', 'CryptoQuant', 'BTC', 'analysis', TRUE, 3),
-    ('-1001234079543', 'BeInCrypto Vietnam', 'BTC', 'news', TRUE, 3)
+    ('-1001343715577', 'CryptoQuant', 'CryptoQuant', 'BTC', 'analysis', TRUE, 3),
+    ('-1001234079543', 'BeInCrypto Vietnam', 'beincrypto_vietnam', 'BTC', 'news', TRUE, 3)
 ON CONFLICT (channel_id) DO NOTHING;
 
 -- Twitter Sources (21 crypto accounts with priority) - matching local database
