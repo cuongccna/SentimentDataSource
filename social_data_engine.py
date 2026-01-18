@@ -22,7 +22,10 @@ SOURCE_RELIABILITY = {
     "telegram": 0.3
 }
 
-# ASSET FILTER PATTERNS (MANDATORY)
+# Import asset config for dynamic keyword detection
+from asset_config import get_asset_config, contains_tracked_asset, detect_asset as detect_asset_from_text
+
+# Legacy ASSET FILTER PATTERNS (fallback)
 ASSET_PATTERNS = [
     re.compile(r'\$BTC\b', re.IGNORECASE),
     re.compile(r'#BTC\b', re.IGNORECASE),
@@ -62,17 +65,36 @@ class NormalizedRecord:
 
 def contains_asset_keyword(text: str) -> bool:
     """
-    Check if text contains at least one of:
-    - "$BTC"
-    - "#BTC"
-    - "bitcoin" (case-insensitive)
+    Check if text contains any tracked crypto asset keyword.
+    Uses dynamic asset configuration from database.
     """
     if not text:
         return False
-    for pattern in ASSET_PATTERNS:
-        if pattern.search(text):
-            return True
-    return False
+    
+    # Use dynamic asset config
+    try:
+        return contains_tracked_asset(text)
+    except Exception:
+        # Fallback to legacy patterns
+        for pattern in ASSET_PATTERNS:
+            if pattern.search(text):
+                return True
+        return False
+
+
+def get_detected_asset(text: str) -> str:
+    """
+    Detect which asset the text is about.
+    Returns the highest priority matching asset, or 'BTC' as default.
+    """
+    if not text:
+        return "BTC"
+    
+    try:
+        asset = detect_asset_from_text(text)
+        return asset if asset else "BTC"
+    except Exception:
+        return "BTC"
 
 
 def safe_log(value: float) -> float:

@@ -69,8 +69,18 @@ MAX_FUTURE_SECONDS = 5   # 5 seconds tolerance
 # State file path
 STATE_FILE_PATH = Path("worker_state.json")
 
-# Supported asset
-SUPPORTED_ASSET = "BTC"
+# Asset configuration - loaded dynamically from database
+# Use asset_config module for multi-asset support
+from asset_config import get_asset_config, detect_asset as detect_asset_from_text
+
+def get_supported_assets() -> list:
+    """Get list of currently active asset symbols."""
+    return get_asset_config().get_active_symbols()
+
+def get_asset_for_text(text: str) -> str:
+    """Detect asset from text, defaults to BTC if none detected."""
+    asset = detect_asset_from_text(text)
+    return asset if asset else "BTC"
 
 
 # =============================================================================
@@ -764,9 +774,12 @@ class PipelineExecutor:
             velocity = 0.0  # Will be updated with window context
             manipulation_flag = check_manipulation_flag(event, source)
             
+            # Detect asset from text dynamically
+            detected_asset = get_asset_for_text(text)
+            
             raw_id = self.database.insert_raw_event(
                 source=source,
-                asset=SUPPORTED_ASSET,
+                asset=detected_asset,
                 event_time=event_time,
                 ingest_time=ingest_time,
                 text=text,

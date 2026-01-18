@@ -62,6 +62,10 @@ class logger:
 
 SOURCE_RELIABILITY = 0.5
 
+# Import asset config for dynamic keyword detection
+from asset_config import get_asset_config, contains_tracked_asset, detect_asset
+
+# Legacy BTC keywords (fallback if asset_config not available)
 BTC_KEYWORDS = [
     "btc", "bitcoin", "₿", "satoshi", "sats", 
     "$btc", "#btc", "#bitcoin"
@@ -130,9 +134,21 @@ class ScrapedTweet:
         return hashlib.sha256(content.encode()).hexdigest()[:16]
     
     def has_btc_keyword(self) -> bool:
-        """Check if tweet contains BTC-related keywords."""
-        text_lower = self.text.lower()
-        return any(kw in text_lower for kw in BTC_KEYWORDS)
+        """Check if tweet contains any tracked asset keywords."""
+        # Use dynamic asset config
+        try:
+            return contains_tracked_asset(self.text)
+        except Exception:
+            # Fallback to legacy BTC keywords
+            text_lower = self.text.lower()
+            return any(kw in text_lower for kw in BTC_KEYWORDS)
+    
+    def get_detected_asset(self) -> Optional[str]:
+        """Get the detected asset symbol from tweet text."""
+        try:
+            return detect_asset(self.text)
+        except Exception:
+            return "BTC" if self.has_btc_keyword() else None
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -150,6 +166,7 @@ class ScrapedTweet:
             "author_weight": self.author_weight,
             "fingerprint": self.fingerprint,
             "has_btc": self.has_btc_keyword(),
+            "asset": self.get_detected_asset(),
             "is_retweet": self.is_retweet,
             "is_quote": self.is_quote,
         }
