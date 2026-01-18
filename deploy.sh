@@ -181,9 +181,15 @@ setup_postgresql() {
     sudo -u postgres $PSQL_BIN -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1 || \
         sudo -u postgres $PSQL_BIN -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
     
-    # Grant privileges
+    # Grant privileges (PostgreSQL 15+ requires explicit schema permissions)
     sudo -u postgres $PSQL_BIN -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};"
     sudo -u postgres $PSQL_BIN -d ${DB_NAME} -c "GRANT ALL ON SCHEMA public TO ${DB_USER};"
+    sudo -u postgres $PSQL_BIN -d ${DB_NAME} -c "GRANT CREATE ON SCHEMA public TO ${DB_USER};"
+    sudo -u postgres $PSQL_BIN -d ${DB_NAME} -c "ALTER SCHEMA public OWNER TO ${DB_USER};"
+    sudo -u postgres $PSQL_BIN -d ${DB_NAME} -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO ${DB_USER};"
+    sudo -u postgres $PSQL_BIN -d ${DB_NAME} -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO ${DB_USER};"
+    sudo -u postgres $PSQL_BIN -d ${DB_NAME} -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO ${DB_USER};"
+    sudo -u postgres $PSQL_BIN -d ${DB_NAME} -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO ${DB_USER};"
     
     log_success "PostgreSQL database configured"
 }
