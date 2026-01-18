@@ -562,10 +562,11 @@ module.exports = {
     // Flask API - Sentiment Analysis (Port 5000)
     {
       name: "sentiment-api",
-      script: ".venv/bin/gunicorn",
-      args: "-w 4 -b 0.0.0.0:5000 api_service:app",
+      script: ".venv/bin/python",
+      args: "-m gunicorn -w 4 -b 0.0.0.0:5000 api_service:app",
       cwd: "/opt/SentimentDataSource",
       instances: 1,
+      exec_mode: "fork",
       autorestart: true,
       watch: false,
       max_memory_restart: "300M",
@@ -582,10 +583,11 @@ module.exports = {
     // FastAPI - Social Context API (Port 8000)
     {
       name: "social-context-api",
-      script: ".venv/bin/uvicorn",
-      args: "fastapi_social_context:app --host 0.0.0.0 --port 8000 --workers 4",
+      script: ".venv/bin/python",
+      args: "-m uvicorn fastapi_social_context:app --host 0.0.0.0 --port 8000 --workers 4",
       cwd: "/opt/SentimentDataSource",
       instances: 1,
+      exec_mode: "fork",
       autorestart: true,
       watch: false,
       max_memory_restart: "300M",
