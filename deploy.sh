@@ -28,12 +28,13 @@ NODE_VERSION="20"
 # Ensure PostgreSQL binaries are in PATH
 export PATH=$PATH:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:/usr/bin
 
-# Database Configuration (read from .env or use defaults)
-DB_HOST="${POSTGRES_HOST:-localhost}"
-DB_PORT="${POSTGRES_PORT:-5432}"
-DB_NAME="${POSTGRES_DATABASE:-sentiment_db}"
-DB_USER="${POSTGRES_USER:-sentiment_user}"
-DB_PASSWORD="${POSTGRES_PASSWORD:-Cuongnv123456}"
+# Database Configuration (will be loaded from .env)
+# DO NOT hardcode sensitive values here!
+DB_HOST=""
+DB_PORT=""
+DB_NAME=""
+DB_USER=""
+DB_PASSWORD=""
 
 # ============================================================================
 # Helper Functions
@@ -78,12 +79,23 @@ load_env() {
         source ${APP_DIR}/.env
         set +a
         
-        # Update variables after loading
+        # Update variables after loading (no hardcoded defaults for sensitive data)
         DB_HOST="${POSTGRES_HOST:-localhost}"
         DB_PORT="${POSTGRES_PORT:-5432}"
         DB_NAME="${POSTGRES_DATABASE:-sentiment_db}"
-        DB_USER="${POSTGRES_USER:-sentiment_user}"
-        DB_PASSWORD="${POSTGRES_PASSWORD:-Cuongnv123456}"
+        DB_USER="${POSTGRES_USER}"
+        DB_PASSWORD="${POSTGRES_PASSWORD}"
+        
+        # Validate required credentials
+        if [ -z "$DB_USER" ] || [ -z "$DB_PASSWORD" ]; then
+            log_error "Database credentials not found in .env file!"
+            log_error "Please ensure POSTGRES_USER and POSTGRES_PASSWORD are set."
+            exit 1
+        fi
+    else
+        log_error ".env file not found at ${APP_DIR}/.env"
+        log_error "Please create .env file with database credentials."
+        exit 1
     fi
 }
 
@@ -220,9 +232,27 @@ run_database_migration() {
 -- ============================================================================
 -- SENTIMENT DATA SOURCE - DATABASE MIGRATION
 -- ============================================================================
+-- This migration handles both fresh installs and upgrades from old schema
+-- ============================================================================
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- ============================================================================
+-- DROP OLD TABLES (if upgrading from old schema)
+-- ============================================================================
+-- Uncomment these lines if you want to reset the database completely
+-- WARNING: This will delete all data!
+DROP TABLE IF EXISTS twitter_messages CASCADE;
+DROP TABLE IF EXISTS data_quality_metrics CASCADE;
+DROP TABLE IF EXISTS risk_indicators CASCADE;
+DROP TABLE IF EXISTS alert_history CASCADE;
+DROP TABLE IF EXISTS aggregated_signals CASCADE;
+DROP TABLE IF EXISTS sentiment_results CASCADE;
+DROP TABLE IF EXISTS ingested_messages CASCADE;
+DROP TABLE IF EXISTS reddit_sources CASCADE;
+DROP TABLE IF EXISTS twitter_sources CASCADE;
+DROP TABLE IF EXISTS telegram_sources CASCADE;
 
 -- ============================================================================
 -- 1. TELEGRAM SOURCES TABLE
@@ -563,16 +593,20 @@ setup_env_file() {
     ENV_FILE="${APP_DIR}/.env"
     
     if [ -f "${ENV_FILE}" ]; then
-        log_warn ".env file already exists, skipping..."
+        log_info ".env file already exists, validating..."
         return
     fi
     
-    # Create .env file from example or create new
-    if [ -f "${APP_DIR}/.env.example" ]; then
+    # Check if .env.production exists (preferred)
+    if [ -f "${APP_DIR}/.env.production" ]; then
+        cp ${APP_DIR}/.env.production ${ENV_FILE}
+        log_success "Copied .env.production to .env"
+    elif [ -f "${APP_DIR}/.env.example" ]; then
         cp ${APP_DIR}/.env.example ${ENV_FILE}
         log_warn "Copied .env.example to .env - Please update with actual values!"
     else
-        cat > ${ENV_FILE} << EOF
+        # Create template .env file (NO hardcoded passwords!)
+        cat > ${ENV_FILE} << 'EOF'
 # =============================================================================
 # DATABASE CONFIGURATION
 # =============================================================================
@@ -580,14 +614,14 @@ POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DATABASE=sentiment_db
 POSTGRES_USER=sentiment_user
-POSTGRES_PASSWORD=Cuongnv123456
+POSTGRES_PASSWORD=CHANGE_ME
 
 # =============================================================================
 # TELEGRAM CONFIGURATION
 # =============================================================================
 TELEGRAM_API_ID=YOUR_API_ID
 TELEGRAM_API_HASH=YOUR_API_HASH
-TELEGRAM_PHONE=+1234567890
+TELEGRAM_PHONE=+84xxxxxxxxx
 
 # =============================================================================
 # TELEGRAM ALERTING (Bot API for sending alerts)
@@ -599,10 +633,10 @@ TELEGRAM_CHANNEL_ID=YOUR_CHANNEL_ID
 # TWITTER PROXY CONFIGURATION (SOCKS5)
 # Required for Twitter Syndication API to avoid rate limits
 # =============================================================================
-TWITTER_PROXY_HOST=1.52.54.227
+TWITTER_PROXY_HOST=YOUR_PROXY_HOST
 TWITTER_PROXY_PORT=50099
-TWITTER_PROXY_USER=muaproxy694c57898a312
-TWITTER_PROXY_PASS=fsejfbalvpjschjc
+TWITTER_PROXY_USER=YOUR_PROXY_USER
+TWITTER_PROXY_PASS=YOUR_PROXY_PASS
 TWITTER_PROXY_TYPE=socks5
 
 # =============================================================================
@@ -618,13 +652,14 @@ REDDIT_GLOBAL_RATE_LIMIT=500
 ENVIRONMENT=production
 DEBUG=false
 EOF
-        log_warn "Created new .env file - Please update with actual values!"
+        log_error "Created template .env file - YOU MUST UPDATE WITH ACTUAL VALUES!"
+        log_error "Edit ${ENV_FILE} and set all credentials before continuing."
     fi
     
     chown ${APP_USER}:${APP_USER} ${ENV_FILE}
     chmod 600 ${ENV_FILE}
     
-    log_success "Environment file created"
+    log_success "Environment file ready"
 }
 
 # ============================================================================
@@ -914,10 +949,10 @@ display_status() {
     echo "  - User: ${DB_USER}"
     echo ""
     echo "Tables Created:"
-    echo "  - telegram_sources (10 channels)"
+    echo "  - telegram_sources (18 channels)"
     echo "  - twitter_sources (21 accounts)"
     echo "  - twitter_messages"
-    echo "  - reddit_sources"
+    echo "  - reddit_sources (15 subreddits)"
     echo "  - ingested_messages"
     echo "  - sentiment_results"
     echo "  - aggregated_signals"
@@ -970,9 +1005,13 @@ main() {
     install_system_deps
     install_nodejs
     create_app_user
-    setup_postgresql
+    
+    # Setup .env first, then load credentials
     setup_env_file
     load_env
+    
+    # Now setup database with loaded credentials
+    setup_postgresql
     run_database_migration
     setup_python_env
     setup_pm2
