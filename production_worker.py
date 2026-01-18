@@ -148,10 +148,15 @@ class PostgreSQLDatabase(DatabaseInterface):
             # Get text
             text = kwargs.get("text", "")
             
-            # Get fingerprint - use provided or generate from text
+            # Get fingerprint - use provided or generate from source + message_id + text
+            # This ensures same text from different sources/messages is NOT duplicate
             fingerprint = kwargs.get("fingerprint")
             if not fingerprint:
-                fingerprint = hashlib.md5(text.encode()).hexdigest()
+                source = kwargs.get("source", "")
+                message_id = kwargs.get("message_id", "")
+                # Include source and message_id in fingerprint to avoid cross-source duplicates
+                unique_key = f"{source}:{message_id}:{text}"
+                fingerprint = hashlib.md5(unique_key.encode()).hexdigest()
             
             # Check duplicate by fingerprint
             cursor.execute(
