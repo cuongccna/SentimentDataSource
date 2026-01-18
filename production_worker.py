@@ -5,6 +5,8 @@ This worker:
 - Connects to PostgreSQL database
 - Uses REAL crawlers (Reddit, Twitter, Telegram)
 - Persists data to PostgreSQL tables
+- Analyzes sentiment and aggregates signals
+- Sends periodic reports to Telegram channel
 
 ABSOLUTE RULES:
 - NO mocking
@@ -22,8 +24,9 @@ import threading
 import asyncio
 import logging
 import json
+import aiohttp
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -56,6 +59,23 @@ try:
 except ImportError:
     HAS_TWITTER_SCRAPER = False
     logger.warning("twitter_scraper not available. Twitter will use legacy ntscraper.")
+
+# Import sentiment pipeline
+try:
+    from sentiment_pipeline import process_record as analyze_sentiment
+    HAS_SENTIMENT = True
+except ImportError:
+    HAS_SENTIMENT = False
+    logger.warning("sentiment_pipeline not available. Sentiment analysis disabled.")
+
+
+# =============================================================================
+# TELEGRAM ALERTING CONFIG
+# =============================================================================
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "")
+REPORT_INTERVAL_MINUTES = int(os.getenv("REPORT_INTERVAL_MINUTES", "30"))
 
 
 # =============================================================================
@@ -174,14 +194,34 @@ class PostgreSQLDatabase(DatabaseInterface):
         try:
             cursor = self.conn.cursor()
             
-            # Get message_id as integer (reference to ingested_messages.id)
-            message_id = kwargs.get("message_id")
+            # Get message_id - could be raw_event_id from pipeline or direct message_id
+            message_id = kwargs.get("raw_event_id") or kwargs.get("message_id")
             if isinstance(message_id, str):
                 # Try to extract numeric ID or use hash
                 try:
                     message_id = int(message_id)
                 except ValueError:
                     message_id = abs(hash(message_id)) % (10 ** 9)  # Convert to int
+            
+            # Map label from int (-1, 0, 1) to string
+            label = kwargs.get("sentiment_label", 0)
+            if isinstance(label, int):
+                label_map = {-1: "bearish", 0: "neutral", 1: "bullish"}
+                sentiment_label = label_map.get(label, "neutral")
+            else:
+                sentiment_label = str(label)
+            
+            # Get confidence and compute derived values
+            confidence = kwargs.get("confidence", 0.5)
+            sentiment_score = kwargs.get("sentiment_score")
+            if sentiment_score is None:
+                # Derive from label
+                label_score = {-1: -1.0, 0: 0.0, 1: 1.0}
+                sentiment_score = label_score.get(kwargs.get("sentiment_label", 0), 0.0)
+            
+            # Compute weighted score and signal strength
+            weighted_score = kwargs.get("weighted_score", sentiment_score * confidence)
+            signal_strength = kwargs.get("signal_strength", abs(weighted_score))
             
             cursor.execute("""
                 INSERT INTO sentiment_results 
@@ -191,11 +231,11 @@ class PostgreSQLDatabase(DatabaseInterface):
             """, (
                 message_id,
                 kwargs.get("asset", "BTC"),
-                kwargs.get("sentiment_score", 0.0),
-                kwargs.get("sentiment_label", "neutral"),
-                kwargs.get("confidence", 0.5),
-                kwargs.get("weighted_score", 0.0),
-                kwargs.get("signal_strength", 0.0)
+                sentiment_score,
+                sentiment_label,
+                confidence,
+                weighted_score,
+                signal_strength
             ))
             
             result = cursor.fetchone()
@@ -291,6 +331,250 @@ class PostgreSQLDatabase(DatabaseInterface):
         if self.conn:
             self.conn.close()
             logger.info("Database connection closed")
+
+
+# =============================================================================
+# TELEGRAM REPORTER
+# =============================================================================
+
+class TelegramReporter:
+    """
+    Sends periodic sentiment reports to Telegram channel.
+    
+    Features:
+    - Aggregates sentiment data from last N minutes
+    - Formats report with emoji and signal indicators
+    - Saves alert history to database
+    """
+    
+    def __init__(self, database: PostgreSQLDatabase):
+        self.database = database
+        self.bot_token = TELEGRAM_BOT_TOKEN
+        self.channel_id = TELEGRAM_CHANNEL_ID
+        self.report_interval = REPORT_INTERVAL_MINUTES
+        self._last_report_time: Optional[datetime] = None
+        self._enabled = bool(self.bot_token and self.channel_id)
+        
+        if self._enabled:
+            logger.info(f"Telegram Reporter enabled (interval: {self.report_interval} min)")
+        else:
+            logger.warning("Telegram Reporter disabled - missing BOT_TOKEN or CHANNEL_ID")
+    
+    def should_send_report(self) -> bool:
+        """Check if it's time to send a report."""
+        if not self._enabled:
+            return False
+        
+        now = datetime.now(timezone.utc)
+        
+        if self._last_report_time is None:
+            # First run - wait for full interval
+            self._last_report_time = now
+            return False
+        
+        elapsed = (now - self._last_report_time).total_seconds() / 60
+        return elapsed >= self.report_interval
+    
+    def get_aggregated_data(self) -> Optional[Dict[str, Any]]:
+        """Get aggregated sentiment data from database."""
+        try:
+            cursor = self.database.conn.cursor()
+            
+            window_start = datetime.now(timezone.utc) - timedelta(minutes=self.report_interval)
+            
+            # Get message counts by source
+            cursor.execute("""
+                SELECT 
+                    source,
+                    COUNT(*) as count,
+                    AVG(source_reliability) as avg_reliability
+                FROM ingested_messages
+                WHERE created_at >= %s
+                GROUP BY source
+            """, (window_start,))
+            
+            sources = {}
+            total_messages = 0
+            for row in cursor.fetchall():
+                sources[row[0]] = {
+                    "count": row[1],
+                    "avg_reliability": float(row[2]) if row[2] else 0.5
+                }
+                total_messages += row[1]
+            
+            if total_messages == 0:
+                logger.info("No new messages to report")
+                return None
+            
+            # Get sentiment aggregation
+            cursor.execute("""
+                SELECT 
+                    sentiment_label,
+                    COUNT(*) as count,
+                    AVG(sentiment_score) as avg_score,
+                    AVG(confidence) as avg_confidence,
+                    AVG(weighted_score) as avg_weighted
+                FROM sentiment_results
+                WHERE created_at >= %s
+                GROUP BY sentiment_label
+            """, (window_start,))
+            
+            sentiments = {"bullish": 0, "bearish": 0, "neutral": 0}
+            total_score = 0.0
+            total_weighted = 0.0
+            sentiment_count = 0
+            
+            for row in cursor.fetchall():
+                label = row[0].lower() if row[0] else "neutral"
+                if label in sentiments:
+                    sentiments[label] = row[1]
+                    total_score += row[2] * row[1] if row[2] else 0
+                    total_weighted += row[4] * row[1] if row[4] else 0
+                    sentiment_count += row[1]
+            
+            avg_score = total_score / sentiment_count if sentiment_count > 0 else 0
+            avg_weighted = total_weighted / sentiment_count if sentiment_count > 0 else 0
+            
+            # Determine signal type
+            if avg_weighted > 0.1:
+                signal_type = "BULLISH"
+            elif avg_weighted < -0.1:
+                signal_type = "BEARISH"
+            else:
+                signal_type = "NEUTRAL"
+            
+            # Calculate signal strength
+            signal_strength = min(1.0, abs(avg_weighted) * 2)
+            
+            # Calculate velocity (messages per minute)
+            velocity = total_messages / self.report_interval
+            
+            return {
+                "signal_type": signal_type,
+                "total_messages": total_messages,
+                "sentiment_analyzed": sentiment_count,
+                "bullish": sentiments["bullish"],
+                "bearish": sentiments["bearish"],
+                "neutral": sentiments["neutral"],
+                "avg_score": avg_score,
+                "weighted_sentiment": avg_weighted,
+                "signal_strength": signal_strength,
+                "velocity": velocity,
+                "sources": sources,
+                "window_minutes": self.report_interval
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get aggregated data: {e}")
+            return None
+    
+    def format_report(self, data: Dict[str, Any]) -> str:
+        """Format aggregated data into Telegram message."""
+        signal_type = data["signal_type"]
+        
+        if signal_type == "BULLISH":
+            emoji = "🟢"
+            icon = "📈"
+        elif signal_type == "BEARISH":
+            emoji = "🔴"
+            icon = "📉"
+        else:
+            emoji = "⚪"
+            icon = "➡️"
+        
+        message = f"""
+{emoji} *BTC SENTIMENT REPORT* {emoji}
+
+{icon} *Signal: {signal_type}*
+
+📊 *Analysis Summary (Last {data['window_minutes']} min)*
+• Total Messages: {data['total_messages']}
+• Sentiment Analyzed: {data['sentiment_analyzed']}
+• 🟢 Bullish: {data['bullish']}
+• 🔴 Bearish: {data['bearish']}
+• ⚪ Neutral: {data['neutral']}
+
+📈 *Metrics*
+• Average Score: {data['avg_score']:.4f}
+• Weighted Sentiment: {data['weighted_sentiment']:.4f}
+• Signal Strength: {data['signal_strength']:.4f}
+• Velocity: {data['velocity']:.2f} msg/min
+
+📡 *Sources*
+"""
+        
+        for source, info in data["sources"].items():
+            source_emoji = "📱" if source == "telegram" else "🐦" if source == "twitter" else "👽"
+            message += f"• {source_emoji} {source.title()}: {info['count']} msgs\n"
+        
+        message += f"""
+⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}
+
+_Powered by Social Sentiment Pipeline_
+"""
+        
+        return message
+    
+    async def send_report(self) -> bool:
+        """Send report to Telegram channel."""
+        if not self._enabled:
+            return False
+        
+        data = self.get_aggregated_data()
+        if not data:
+            self._last_report_time = datetime.now(timezone.utc)
+            return False
+        
+        message = self.format_report(data)
+        
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        payload = {
+            "chat_id": self.channel_id,
+            "text": message,
+            "parse_mode": "Markdown"
+        }
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload) as response:
+                    result = await response.json()
+                    
+                    if result.get("ok"):
+                        msg_id = result["result"]["message_id"]
+                        logger.info(f"Report sent to Telegram! Message ID: {msg_id}")
+                        
+                        # Save to alert history
+                        self._save_alert_history(data, message, str(msg_id), True)
+                        self._last_report_time = datetime.now(timezone.utc)
+                        return True
+                    else:
+                        error = result.get("description", "Unknown error")
+                        logger.error(f"Telegram API error: {error}")
+                        self._save_alert_history(data, message, None, False)
+                        return False
+                        
+        except Exception as e:
+            logger.error(f"Failed to send Telegram report: {e}")
+            return False
+    
+    def _save_alert_history(self, data: Dict, message: str, msg_id: Optional[str], success: bool):
+        """Save alert to database."""
+        try:
+            cursor = self.database.conn.cursor()
+            cursor.execute("""
+                INSERT INTO alert_history 
+                (asset, alert_type, message, telegram_message_id, success)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (
+                "BTC",
+                data["signal_type"],
+                message,
+                msg_id,
+                success
+            ))
+            self.database.conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to save alert history: {e}")
 
 
 # =============================================================================
@@ -881,6 +1165,7 @@ class TelegramSourceCollector(SourceCollector):
 class ProductionWorker(BackgroundWorker):
     """
     Production worker with PostgreSQL and real collectors.
+    Includes Telegram reporting for periodic sentiment reports.
     """
     
     def __init__(self):
@@ -891,6 +1176,10 @@ class ProductionWorker(BackgroundWorker):
             database=database,
             state_file=Path("production_worker_state.json")
         )
+        
+        # Initialize Telegram Reporter
+        self.telegram_reporter = TelegramReporter(database)
+        self._async_loop = asyncio.new_event_loop()
         
         logger.info("Production worker initialized with PostgreSQL database")
     
@@ -933,19 +1222,32 @@ class ProductionWorker(BackgroundWorker):
         self._running = True
         logger.info("Production worker started with real collectors")
         
-        # Block main thread with quality updates
+        # Block main thread with quality updates and Telegram reporting
         try:
             while self._running:
                 try:
+                    # Quality updates
                     if self.quality_updater.should_update():
                         self.quality_updater.update()
+                    
+                    # Telegram reporting
+                    if self.telegram_reporter.should_send_report():
+                        logger.info("Sending periodic Telegram report...")
+                        try:
+                            self._async_loop.run_until_complete(
+                                self.telegram_reporter.send_report()
+                            )
+                        except Exception as e:
+                            logger.error(f"Telegram report error: {e}")
+                    
                     self.state.save_state()
                 except Exception as e:
-                    logger.error(f"Quality update error: {e}")
+                    logger.error(f"Main loop error: {e}")
                 time.sleep(5)
         except KeyboardInterrupt:
             logger.info("Shutdown requested...")
         finally:
+            self._async_loop.close()
             self.stop()
 
 
