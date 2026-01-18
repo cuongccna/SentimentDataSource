@@ -86,14 +86,24 @@ class NormalizedRedditRecord:
     author_weight: float
     velocity: float
     source_reliability: float
+    post_id: str = ""  # Reddit post/comment ID
+    subreddit: str = ""
+    author: str = ""
+    score: int = 0
+    num_comments: int = 0
     
     def to_dict(self) -> dict:
         """Convert to output dictionary format."""
         return {
+            "id": self.post_id,
             "source": self.source,
             "asset": self.asset,
             "timestamp": self.timestamp,
             "text": self.text,
+            "subreddit": self.subreddit,
+            "author": self.author,
+            "score": self.score,
+            "num_comments": self.num_comments,
             "metrics": {
                 "engagement_weight": self.engagement_weight,
                 "author_weight": self.author_weight,
@@ -457,6 +467,11 @@ class RedditCrawler:
         # Track mention
         self.mention_tracker.add_mention(parse_timestamp(created_utc))
         
+        # Get post ID and metadata
+        post_id = post_data.get("id", post_data.get("name", ""))
+        subreddit = post_data.get("subreddit", "")
+        author = post_data.get("author", "")
+        
         return NormalizedRedditRecord(
             source="reddit",
             asset="BTC",
@@ -465,7 +480,12 @@ class RedditCrawler:
             engagement_weight=engagement_weight,
             author_weight=author_weight,
             velocity=velocity,
-            source_reliability=SOURCE_RELIABILITY
+            source_reliability=SOURCE_RELIABILITY,
+            post_id=post_id,
+            subreddit=subreddit,
+            author=author,
+            score=score,
+            num_comments=num_comments
         )
     
     def normalize_comment(self, comment_data: dict, velocity: float) -> Optional[NormalizedRedditRecord]:
@@ -509,6 +529,11 @@ class RedditCrawler:
         # Track mention
         self.mention_tracker.add_mention(parse_timestamp(created_utc))
         
+        # Get comment ID and metadata
+        comment_id = comment_data.get("id", comment_data.get("name", ""))
+        subreddit = comment_data.get("subreddit", "")
+        author = comment_data.get("author", "")
+        
         return NormalizedRedditRecord(
             source="reddit",
             asset="BTC",
@@ -517,7 +542,12 @@ class RedditCrawler:
             engagement_weight=engagement_weight,
             author_weight=author_weight,
             velocity=velocity,
-            source_reliability=SOURCE_RELIABILITY
+            source_reliability=SOURCE_RELIABILITY,
+            post_id=comment_id,
+            subreddit=subreddit,
+            author=author,
+            score=score,
+            num_comments=0  # Comments don't have num_comments
         )
     
     def crawl_subreddit(self, subreddit: str, post_limit: int = 25, comment_limit: int = 50) -> list[dict]:
