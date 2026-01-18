@@ -107,15 +107,29 @@ install_system_deps() {
         ufw \
         nginx \
         software-properties-common \
-        python${PYTHON_VERSION} \
-        python${PYTHON_VERSION}-venv \
-        python${PYTHON_VERSION}-dev \
         python3-pip \
         postgresql \
         postgresql-contrib \
         postgresql-client \
         libpq-dev
     
+    # Install Python - try deadsnakes PPA first, fallback to system python3
+    log_info "Installing Python ${PYTHON_VERSION}..."
+    if ! command -v python${PYTHON_VERSION} &> /dev/null; then
+        # Add deadsnakes PPA for newer Python versions
+        add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null || true
+        apt-get update -y
+        apt-get install -y python${PYTHON_VERSION} python${PYTHON_VERSION}-venv python${PYTHON_VERSION}-dev 2>/dev/null
+        
+        # If still not available, use system Python 3
+        if ! command -v python${PYTHON_VERSION} &> /dev/null; then
+            log_warn "Python ${PYTHON_VERSION} not available, using system Python 3"
+            PYTHON_VERSION="3"
+            apt-get install -y python3 python3-venv python3-dev
+        fi
+    fi
+    
+    log_info "Using Python version: $(python${PYTHON_VERSION} --version)"
     log_success "System dependencies installed"
 }
 
