@@ -50,6 +50,13 @@ from background_worker import (
     logger
 )
 
+# Import asset configuration for dynamic filtering
+from asset_config import (
+    detect_asset as detect_asset_from_text,
+    contains_tracked_asset,
+    get_asset_config
+)
+
 from reddit_crawler import RedditCrawler
 
 # Import Twitter Scraper (new syndication-based scraper)
@@ -213,7 +220,9 @@ class PostgreSQLDatabase(DatabaseInterface):
             
             result = cursor.fetchone()
             self.conn.commit()
-            logger.debug(f"Inserted event {message_id} with id {result[0]}")
+            # Log successful insert with asset info
+            text_preview = text[:60].replace('\n', ' ') if text else ""
+            logger.info(f"[{source}] Inserted #{result[0]} | Asset: {asset} | {text_preview}...")
             return str(result[0]) if result else None
             
         except Exception as e:
@@ -639,12 +648,18 @@ class RedditSourceCollector(SourceCollector):
                 records = self.crawler.crawl_subreddit(subreddit, post_limit=10)
                 
                 for record in records:
+                    text = record.get("text", "")
+                    
+                    # Detect asset from text
+                    detected_asset = detect_asset_from_text(text) or "BTC"
+                    
                     # Convert to event format expected by pipeline
                     event = {
                         "message_id": f"reddit_{record.get('id', '')}",
                         "source": "reddit",
                         "source_id": subreddit,
-                        "text": record.get("text", ""),
+                        "text": text,
+                        "asset": detected_asset,
                         "author": record.get("author", ""),
                         "timestamp": record.get("timestamp", datetime.now(timezone.utc).isoformat()),
                         "created_at": record.get("timestamp"),
@@ -887,18 +902,22 @@ class TwitterSourceCollector(SourceCollector):
                 if not timestamp_str:
                     timestamp_str = datetime.now(timezone.utc).isoformat()
                 
+                # Detect asset from text dynamically
+                text = data.get("text", "")
+                detected_asset = detect_asset_from_text(text) or "BTC"
+                
                 event = {
                     "message_id": f"tw_{tweet_id}",
                     "source": "twitter",
                     "source_id": meta.get("username", "unknown"),
-                    "text": data.get("text", ""),
+                    "text": text,
                     "author": meta.get("username", ""),
                     "timestamp": timestamp_str,
                     "created_at": timestamp_str,
                     "likes": meta.get("like_count", 0),
                     "retweets": meta.get("retweet_count", 0),
                     "replies": meta.get("reply_count", 0),
-                    "asset": data.get("asset", "BTC"),
+                    "asset": detected_asset,
                     "metadata": {
                         "tweet_id": tweet_id,
                         "username": meta.get("username"),
@@ -1116,16 +1135,20 @@ class TelegramSourceCollector(SourceCollector):
                 if not msg.message:
                     continue
                 
-                # Filter for BTC-related messages (optional - can collect all)
-                text = msg.message.lower()
-                if not any(kw in text for kw in ["btc", "bitcoin", "$btc", "crypto", "eth", "sol"]):
+                # Dynamic asset filtering using asset_config
+                text = msg.message
+                if not contains_tracked_asset(text):
                     continue
+                
+                # Detect which asset this message is about
+                detected_asset = detect_asset_from_text(text) or "BTC"
                 
                 messages.append({
                     "message_id": f"tg_{channel_id}_{msg.id}",
                     "source": "telegram",
                     "source_id": channel_name,
                     "text": msg.message,
+                    "asset": detected_asset,
                     "author": str(msg.from_id.user_id) if hasattr(msg.from_id, 'user_id') else channel_name,
                     "timestamp": msg.date.isoformat(),
                     "created_at": msg.date.isoformat(),
