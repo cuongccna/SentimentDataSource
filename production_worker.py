@@ -158,6 +158,12 @@ class PostgreSQLDatabase(DatabaseInterface):
             if event_time is None:
                 event_time = datetime.now(timezone.utc).isoformat()
             
+            # CRITICAL: Ensure message_id is never empty
+            message_id = kwargs.get("message_id", "")
+            if not message_id:
+                # Generate unique ID from fingerprint
+                message_id = f"auto_{fingerprint[:16]}"
+            
             # Insert with correct schema
             cursor.execute("""
                 INSERT INTO ingested_messages 
@@ -166,7 +172,7 @@ class PostgreSQLDatabase(DatabaseInterface):
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
-                kwargs.get("message_id", ""),
+                message_id,
                 kwargs.get("source", ""),
                 kwargs.get("source_id", ""),  # source_name = source_id (channel/subreddit name)
                 kwargs.get("asset", "BTC"),
