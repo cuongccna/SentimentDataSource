@@ -1,0 +1,20 @@
+{
+  "sources": {
+    "twitter": {
+      "last_event_time": null,
+      "last_message_id": null,
+      "last_run_time": null
+    },
+    "reddit": {
+      "last_event_time": null,
+      "last_message_id": null,
+      "last_run_time": null
+    },
+    "telegram": {
+      "last_event_time": null,
+      "last_message_id": null,
+      "last_run_time": null
+    }
+  },
+  "saved_at": "2026-01-18T01:47:43.227064+00:00"
+}

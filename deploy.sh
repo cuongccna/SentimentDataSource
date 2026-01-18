@@ -239,18 +239,46 @@ CREATE TABLE IF NOT EXISTS telegram_sources (
 );
 
 -- ============================================================================
--- 2. TWITTER SOURCES TABLE
+-- 2. TWITTER SOURCES TABLE (with priority for batch rotation)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS twitter_sources (
     id SERIAL PRIMARY KEY,
-    username VARCHAR(255) UNIQUE NOT NULL,
-    display_name VARCHAR(255),
+    account_id VARCHAR(255) UNIQUE NOT NULL,
+    handle VARCHAR(255),
     account_type VARCHAR(50) DEFAULT 'influencer',
+    asset VARCHAR(50) DEFAULT 'BTC',
     reliability DECIMAL(3,2) DEFAULT 0.50,
-    is_active BOOLEAN DEFAULT TRUE,
+    priority INTEGER DEFAULT 5,
+    enabled BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- ============================================================================
+-- 2.1 TWITTER MESSAGES TABLE (collected tweets)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS twitter_messages (
+    id SERIAL PRIMARY KEY,
+    tweet_id VARCHAR(255) UNIQUE NOT NULL,
+    username VARCHAR(255) NOT NULL,
+    text TEXT NOT NULL,
+    event_time TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    asset VARCHAR(50) DEFAULT 'BTC',
+    like_count INTEGER DEFAULT 0,
+    retweet_count INTEGER DEFAULT 0,
+    reply_count INTEGER DEFAULT 0,
+    engagement_weight DECIMAL(10, 4) DEFAULT 0,
+    author_weight DECIMAL(10, 4) DEFAULT 0,
+    velocity DECIMAL(10, 4) DEFAULT 0,
+    source_reliability DECIMAL(5, 4) DEFAULT 0.5,
+    fingerprint VARCHAR(64),
+    is_retweet BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_twitter_messages_username ON twitter_messages(username);
+CREATE INDEX IF NOT EXISTS idx_twitter_messages_event_time ON twitter_messages(event_time);
+CREATE INDEX IF NOT EXISTS idx_twitter_messages_asset ON twitter_messages(asset);
 
 -- ============================================================================
 -- 3. REDDIT SOURCES TABLE
@@ -394,24 +422,46 @@ CREATE INDEX IF NOT EXISTS idx_dq_metrics_timestamp ON data_quality_metrics(chec
 -- 10. INSERT DEFAULT SOURCES (Sample data)
 -- ============================================================================
 
--- Telegram Sources
+-- Telegram Sources (crypto channels)
 INSERT INTO telegram_sources (channel_id, channel_name, channel_type, reliability) VALUES
-    ('crypto_signals_001', 'Crypto Signals Pro', 'channel', 0.35),
-    ('btc_whales_002', 'BTC Whales Alert', 'channel', 0.40),
-    ('trading_view_003', 'TradingView Ideas', 'channel', 0.30),
-    ('defi_alpha_004', 'DeFi Alpha', 'group', 0.25),
-    ('market_news_005', 'Crypto Market News', 'channel', 0.35)
+    ('WuBlockchainTG', 'WuBlockchain', 'channel', 0.50),
+    ('BitcoinMagazine', 'Bitcoin Magazine', 'channel', 0.55),
+    ('Cointelegraph', 'Cointelegraph', 'channel', 0.50),
+    ('CryptoComAnn', 'Crypto.com Announcements', 'channel', 0.45),
+    ('whale_alert_io', 'Whale Alert', 'channel', 0.60),
+    ('BTCTurkPro', 'BTCTurk Pro', 'channel', 0.40),
+    ('binaborce_ann', 'Binance Announcements', 'channel', 0.55),
+    ('OKX_Announcements', 'OKX Announcements', 'channel', 0.50),
+    ('CoinGecko', 'CoinGecko', 'channel', 0.45),
+    ('TheBlockBeats', 'TheBlockBeats', 'channel', 0.45)
 ON CONFLICT (channel_id) DO NOTHING;
 
--- Twitter Sources
-INSERT INTO twitter_sources (username, display_name, account_type, reliability) VALUES
-    ('whale_alert', 'Whale Alert', 'bot', 0.60),
-    ('documenting_btc', 'Documenting Bitcoin', 'influencer', 0.55),
-    ('bitcoin_archive', 'Bitcoin Archive', 'news', 0.50),
-    ('cryptoquant_com', 'CryptoQuant', 'analytics', 0.65),
-    ('glassnode', 'Glassnode', 'analytics', 0.70),
-    ('santaborz', 'The Moon', 'influencer', 0.40)
-ON CONFLICT (username) DO NOTHING;
+-- Twitter Sources (21 crypto accounts with priority)
+INSERT INTO twitter_sources (account_id, handle, account_type, asset, priority, enabled) VALUES
+    ('whale_alert', '@whale_alert', 'whale_tracker', 'BTC', 10, TRUE),
+    ('BitcoinMagazine', '@BitcoinMagazine', 'news', 'BTC', 9, TRUE),
+    ('Cointelegraph', '@Cointelegraph', 'news', 'BTC', 9, TRUE),
+    ('BitcoinFear', '@BitcoinFear', 'analytics', 'BTC', 8, TRUE),
+    ('CoinDesk', '@CoinDesk', 'news', 'BTC', 8, TRUE),
+    ('glassnode', '@glassnode', 'analytics', 'BTC', 8, TRUE),
+    ('TheBlock__', '@TheBlock__', 'news', 'BTC', 7, TRUE),
+    ('CryptoQuant_News', '@CryptoQuant_News', 'analytics', 'BTC', 7, TRUE),
+    ('WhaleChart', '@WhaleChart', 'whale_tracker', 'BTC', 7, TRUE),
+    ('DocumentingBTC', '@DocumentingBTC', 'education', 'BTC', 7, TRUE),
+    ('WuBlockchain', '@WuBlockchain', 'news', 'BTC', 6, TRUE),
+    ('100trillionUSD', '@100trillionUSD', 'analyst', 'BTC', 6, TRUE),
+    ('WClementeIII', '@WClementeIII', 'analyst', 'BTC', 6, TRUE),
+    ('CryptoDonAlt', '@CryptoDonAlt', 'trader', 'BTC', 5, TRUE),
+    ('Bybit_Official', '@Bybit_Official', 'exchange', 'BTC', 5, TRUE),
+    ('OKX', '@OKX', 'exchange', 'BTC', 5, TRUE),
+    ('binance', '@binance', 'exchange', 'BTC', 5, TRUE),
+    ('coinbase', '@coinbase', 'exchange', 'BTC', 5, TRUE),
+    ('CryptoGodJohn', '@CryptoGodJohn', 'trader', 'BTC', 4, TRUE),
+    ('PlanB', '@PlanB', 'analyst', 'BTC', 4, TRUE),
+    ('santaboris', '@santaboris', 'analyst', 'BTC', 4, TRUE)
+ON CONFLICT (account_id) DO UPDATE SET 
+    priority = EXCLUDED.priority,
+    enabled = EXCLUDED.enabled;
 
 -- Reddit Sources
 INSERT INTO reddit_sources (subreddit, display_name, category, reliability) VALUES
@@ -508,6 +558,16 @@ TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
 TELEGRAM_CHANNEL_ID=YOUR_CHANNEL_ID
 
 # =============================================================================
+# TWITTER PROXY CONFIGURATION (SOCKS5)
+# Required for Twitter Syndication API to avoid rate limits
+# =============================================================================
+TWITTER_PROXY_HOST=1.52.54.227
+TWITTER_PROXY_PORT=50099
+TWITTER_PROXY_USER=muaproxy694c57898a312
+TWITTER_PROXY_PASS=fsejfbalvpjschjc
+TWITTER_PROXY_TYPE=socks5
+
+# =============================================================================
 # RATE LIMITS
 # =============================================================================
 TELEGRAM_GLOBAL_RATE_LIMIT=100
@@ -540,30 +600,41 @@ setup_pm2() {
     cat > ${APP_DIR}/ecosystem.config.js << 'EOF'
 module.exports = {
   apps: [
-    // Background Worker - Data Collection
+    // ==========================================================================
+    // Production Worker - Data Collection from Twitter, Telegram, Reddit
+    // ==========================================================================
     {
       name: "sentiment-worker",
       script: ".venv/bin/python",
-      args: "background_worker.py",
+      args: "production_worker.py",
       cwd: "/opt/SentimentDataSource",
       instances: 1,
+      exec_mode: "fork",
       autorestart: true,
       watch: false,
       max_memory_restart: "500M",
       env: {
         NODE_ENV: "production",
+        PYTHONUNBUFFERED: "1",
       },
       error_file: "./logs/worker-error.log",
       out_file: "./logs/worker-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss Z",
       merge_logs: true,
+      // Restart delay to prevent rapid restarts
+      restart_delay: 5000,
+      // Max restarts in 1 minute
+      max_restarts: 10,
+      min_uptime: "30s",
     },
 
+    // ==========================================================================
     // Flask API - Sentiment Analysis (Port 5000)
+    // ==========================================================================
     {
       name: "sentiment-api",
       script: ".venv/bin/python",
-      args: "-m gunicorn -w 4 -b 0.0.0.0:5000 api_service:app",
+      args: "-m gunicorn -w 4 -b 0.0.0.0:5000 --timeout 120 api_service:app",
       cwd: "/opt/SentimentDataSource",
       instances: 1,
       exec_mode: "fork",
@@ -573,6 +644,7 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         FLASK_ENV: "production",
+        PYTHONUNBUFFERED: "1",
       },
       error_file: "./logs/api-error.log",
       out_file: "./logs/api-out.log",
@@ -580,11 +652,13 @@ module.exports = {
       merge_logs: true,
     },
 
+    // ==========================================================================
     // FastAPI - Social Context API (Port 8000)
+    // ==========================================================================
     {
       name: "social-context-api",
       script: ".venv/bin/python",
-      args: "-m uvicorn fastapi_social_context:app --host 0.0.0.0 --port 8000 --workers 4",
+      args: "-m uvicorn fastapi_social_context:app --host 0.0.0.0 --port 8000 --workers 4 --timeout-keep-alive 30",
       cwd: "/opt/SentimentDataSource",
       instances: 1,
       exec_mode: "fork",
@@ -593,6 +667,7 @@ module.exports = {
       max_memory_restart: "300M",
       env: {
         NODE_ENV: "production",
+        PYTHONUNBUFFERED: "1",
       },
       error_file: "./logs/social-context-error.log",
       out_file: "./logs/social-context-out.log",

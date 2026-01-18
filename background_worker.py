@@ -50,7 +50,8 @@ logger = logging.getLogger("background_worker")
 # =============================================================================
 
 # Scheduling intervals (seconds)
-TWITTER_INTERVAL = 10
+# Twitter: 30 min interval due to Syndication API rate limits
+TWITTER_INTERVAL = 1800  # 30 minutes (rate limit sensitive)
 TELEGRAM_INTERVAL = 20
 REDDIT_INTERVAL = 300  # 5 minutes
 

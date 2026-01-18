@@ -29,3 +29,4 @@ dist/
 build/
 *.egg-info/
 .env.example
+.env.production

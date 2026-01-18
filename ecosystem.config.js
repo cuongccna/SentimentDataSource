@@ -1,14 +1,16 @@
 module.exports = {
   apps: [
     // ===================================================================
-    // BACKGROUND WORKER - Thu thập dữ liệu từ Twitter, Telegram, Reddit
+    // PRODUCTION WORKER - Thu thập dữ liệu từ Twitter, Telegram, Reddit
+    // PostgreSQL persistence + real collectors
     // ===================================================================
     {
       name: "sentiment-worker",
       script: ".venv/Scripts/python.exe",
-      args: "background_worker.py",
+      args: "production_worker.py",
       cwd: "D:/projects/SentimentData/SentimentDataSource",
       instances: 1,
+      exec_mode: "fork",
       autorestart: true,
       watch: false,
       max_memory_restart: "500M",
