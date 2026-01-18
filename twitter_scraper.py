@@ -592,8 +592,13 @@ class TwitterScraper:
         self,
         tweet: ScrapedTweet,
         asset: str = "BTC"
-    ) -> NormalizedRecord:
+    ) -> Optional[NormalizedRecord]:
         """Normalize a scraped tweet to pipeline format."""
+        
+        # Validate tweet_id - critical for deduplication
+        if not tweet.tweet_id:
+            logger.warning(f"Skipping tweet with empty tweet_id from {tweet.username}")
+            return None
         
         # Track for velocity
         if tweet.created_at:
@@ -663,9 +668,10 @@ class TwitterScraper:
                 
                 self.seen_fingerprints.add(tweet.fingerprint)
                 
-                # Normalize
+                # Normalize (may return None for invalid tweets)
                 record = self.normalize_tweet(tweet)
-                records.append(record)
+                if record is not None:
+                    records.append(record)
         
         # Sort by timestamp
         records.sort(key=lambda r: r.timestamp)
@@ -690,7 +696,8 @@ class TwitterScraper:
         records = []
         for tweet in tweets:
             record = self.normalize_tweet(tweet)
-            records.append(record)
+            if record is not None:
+                records.append(record)
         
         return records
 

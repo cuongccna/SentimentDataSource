@@ -837,13 +837,25 @@ class TwitterSourceCollector(SourceCollector):
                 data = record.to_dict()
                 meta = data.get("metadata", {})
                 
+                # Ensure tweet_id exists - skip if not
+                tweet_id = meta.get("tweet_id") or ""
+                if not tweet_id:
+                    # Generate unique ID from fingerprint or hash
+                    fingerprint = data.get("fingerprint", "")
+                    if fingerprint:
+                        tweet_id = f"fp_{fingerprint[:16]}"
+                    else:
+                        # Last resort: hash of text + username
+                        text_hash = abs(hash(f"{data.get('text', '')[:50]}_{meta.get('username', '')}"))
+                        tweet_id = f"hash_{text_hash}"
+                
                 # Ensure timestamp is never None
                 timestamp_str = data.get("timestamp")
                 if not timestamp_str:
                     timestamp_str = datetime.now(timezone.utc).isoformat()
                 
                 event = {
-                    "message_id": f"tw_{meta.get('tweet_id', '')}",
+                    "message_id": f"tw_{tweet_id}",
                     "source": "twitter",
                     "source_id": meta.get("username", "unknown"),
                     "text": data.get("text", ""),
@@ -855,7 +867,7 @@ class TwitterSourceCollector(SourceCollector):
                     "replies": meta.get("reply_count", 0),
                     "asset": data.get("asset", "BTC"),
                     "metadata": {
-                        "tweet_id": meta.get("tweet_id"),
+                        "tweet_id": tweet_id,
                         "username": meta.get("username"),
                         "engagement_weight": data["metrics"]["engagement_weight"],
                         "author_weight": data["metrics"]["author_weight"],
