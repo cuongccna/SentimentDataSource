@@ -127,15 +127,24 @@ class PostgreSQLDatabase(DatabaseInterface):
         logger.info(f"Connected to PostgreSQL: {os.getenv('POSTGRES_DATABASE')}")
     
     def insert_raw_event(self, **kwargs) -> Optional[str]:
-        """Insert raw event into ingested_messages table."""
+        """Insert raw event into ingested_messages table.
+        
+        Compatible with both:
+        - Direct calls from collectors (message_id, timestamp, metadata)
+        - Pipeline calls (event_time, fingerprint, source_reliability)
+        """
         import hashlib
         
         try:
             cursor = self.conn.cursor()
             
-            # Create fingerprint from text
+            # Get text
             text = kwargs.get("text", "")
-            fingerprint = hashlib.md5(text.encode()).hexdigest()
+            
+            # Get fingerprint - use provided or generate from text
+            fingerprint = kwargs.get("fingerprint")
+            if not fingerprint:
+                fingerprint = hashlib.md5(text.encode()).hexdigest()
             
             # Check duplicate by fingerprint
             cursor.execute(
@@ -143,26 +152,42 @@ class PostgreSQLDatabase(DatabaseInterface):
                 (fingerprint,)
             )
             if cursor.fetchone():
+                logger.debug(f"Duplicate event (fingerprint exists): {fingerprint[:16]}")
                 return None  # Duplicate
             
-            # Get metadata and ensure proper JSON format
+            # Get metadata - could be dict or empty
             metadata = kwargs.get("metadata", {})
-            # Replace None values with 0 for JSON compatibility
-            if isinstance(metadata, dict):
-                for key, value in metadata.items():
-                    if value is None:
-                        metadata[key] = 0
+            if not isinstance(metadata, dict):
+                metadata = {}
             
-            # Ensure timestamp is not None
-            event_time = kwargs.get("timestamp")
+            # Replace None values with 0 for JSON compatibility
+            for key, value in list(metadata.items()):
+                if value is None:
+                    metadata[key] = 0
+            
+            # Get timestamp - try multiple param names
+            event_time = kwargs.get("event_time") or kwargs.get("timestamp")
             if event_time is None:
                 event_time = datetime.now(timezone.utc).isoformat()
+            elif hasattr(event_time, 'isoformat'):
+                event_time = event_time.isoformat()
             
             # CRITICAL: Ensure message_id is never empty
             message_id = kwargs.get("message_id", "")
             if not message_id:
                 # Generate unique ID from fingerprint
                 message_id = f"auto_{fingerprint[:16]}"
+            
+            # Get source info
+            source = kwargs.get("source", "")
+            source_name = kwargs.get("source_id") or kwargs.get("source_name", "")
+            asset = kwargs.get("asset", "BTC")
+            
+            # Get metrics - from metadata or direct params
+            source_reliability = kwargs.get("source_reliability", 0.8)
+            engagement_weight = kwargs.get("engagement_weight") or metadata.get("engagement_weight", 0) or 0
+            author_weight = kwargs.get("author_weight") or metadata.get("author_weight", 0) or 0
+            velocity = kwargs.get("velocity") or metadata.get("velocity", 1.0) or 1.0
             
             # Insert with correct schema
             cursor.execute("""
@@ -173,26 +198,28 @@ class PostgreSQLDatabase(DatabaseInterface):
                 RETURNING id
             """, (
                 message_id,
-                kwargs.get("source", ""),
-                kwargs.get("source_id", ""),  # source_name = source_id (channel/subreddit name)
-                kwargs.get("asset", "BTC"),
+                source,
+                source_name,
+                asset,
                 text,
                 event_time,
                 fingerprint,
-                0.8,  # default reliability
-                metadata.get("engagement_weight", 0) or 0,
-                metadata.get("author_weight", 0) or 0,
-                metadata.get("velocity", 1.0) or 1.0,
+                source_reliability,
+                engagement_weight,
+                author_weight,
+                velocity,
                 json.dumps(metadata)
             ))
             
             result = cursor.fetchone()
             self.conn.commit()
+            logger.debug(f"Inserted event {message_id} with id {result[0]}")
             return str(result[0]) if result else None
             
         except Exception as e:
             logger.error(f"Failed to insert raw event: {e}")
             self.conn.rollback()
+            return None
             return None
     
     def insert_sentiment_event(self, **kwargs) -> Optional[str]:
