@@ -793,10 +793,13 @@ class PipelineExecutor:
             )
             
             if raw_id is None:
-                logger.debug(f"[{source}] Insert raw failed (duplicate)")
+                logger.debug(f"[{source}] Duplicate (fingerprint exists): {text[:50]}...")
                 self.metrics.record_error(PipelineStage.INSERT_RAW)
                 self.metrics.record_dropped(source)
                 return False
+            
+            # Log successful insert with asset info
+            logger.info(f"[{source}] ✅ Inserted #{raw_id} | Asset: {detected_asset} | {text[:60]}...")
                 
         except Exception as e:
             logger.error(f"[{source}] Insert raw exception: {e}")
@@ -878,6 +881,7 @@ class PipelineExecutor:
         
         # Success
         self.metrics.record_inserted(source)
+        logger.debug(f"[{source}] Pipeline complete for {detected_asset}: raw={raw_id}, sentiment={sentiment_id}, risk={risk_id}")
         return True
 
 
@@ -1082,6 +1086,10 @@ class SourceLoop:
         # Track latest event time
         latest_event_time = since
         
+        # Track processing stats
+        inserted_count = 0
+        duplicate_count = 0
+        
         # Process each event
         for event in events:
             self.metrics.record_collected(self.source)
@@ -1089,6 +1097,7 @@ class SourceLoop:
             success = self.pipeline.process_event(event, self.source)
             
             if success:
+                inserted_count += 1
                 # Update latest event time
                 ts_raw = None
                 for field in ["created_at", "timestamp", "date", "created_utc"]:
@@ -1099,6 +1108,11 @@ class SourceLoop:
                 event_time = parse_timestamp(ts_raw)
                 if event_time and (latest_event_time is None or event_time > latest_event_time):
                     latest_event_time = event_time
+            else:
+                duplicate_count += 1
+        
+        # Log summary
+        logger.info(f"[{self.source}] 📊 Summary: {inserted_count} inserted, {duplicate_count} duplicates/dropped")
         
         # Update state with latest event time
         if latest_event_time and latest_event_time != since:

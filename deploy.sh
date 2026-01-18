@@ -460,7 +460,39 @@ CREATE INDEX IF NOT EXISTS idx_dq_metrics_source ON data_quality_metrics(source_
 CREATE INDEX IF NOT EXISTS idx_dq_metrics_created ON data_quality_metrics(created_at);
 
 -- ============================================================================
--- 10. INSERT DEFAULT SOURCES (18 Telegram, 21 Twitter, 15 Reddit)
+-- 10. ASSET CONFIGURATION TABLE (Dynamic multi-asset support)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS asset_config (
+    id SERIAL PRIMARY KEY,
+    symbol VARCHAR(20) NOT NULL UNIQUE,
+    name VARCHAR(100) NOT NULL,
+    keywords TEXT[] NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    priority INTEGER DEFAULT 5,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create index
+CREATE INDEX IF NOT EXISTS idx_asset_config_symbol ON asset_config(symbol);
+CREATE INDEX IF NOT EXISTS idx_asset_config_active ON asset_config(is_active);
+
+-- Insert default crypto assets
+INSERT INTO asset_config (symbol, name, keywords, is_active, priority) VALUES
+    ('BTC', 'Bitcoin', ARRAY['btc', 'bitcoin', 'satoshi', 'sats'], TRUE, 10),
+    ('ETH', 'Ethereum', ARRAY['eth', 'ethereum', 'ether'], TRUE, 9),
+    ('SOL', 'Solana', ARRAY['sol', 'solana'], TRUE, 8),
+    ('XRP', 'Ripple', ARRAY['xrp', 'ripple'], TRUE, 7),
+    ('BNB', 'Binance Coin', ARRAY['bnb', 'binance coin'], TRUE, 7),
+    ('ADA', 'Cardano', ARRAY['ada', 'cardano'], TRUE, 6),
+    ('DOGE', 'Dogecoin', ARRAY['doge', 'dogecoin'], TRUE, 6),
+    ('TRX', 'Tron', ARRAY['trx', 'tron'], TRUE, 5),
+    ('USDT', 'Tether', ARRAY['usdt', 'tether'], TRUE, 4),
+    ('USDC', 'USD Coin', ARRAY['usdc', 'usd coin'], TRUE, 4)
+ON CONFLICT (symbol) DO NOTHING;
+
+-- ============================================================================
+-- 11. INSERT DEFAULT SOURCES (18 Telegram, 21 Twitter, 15 Reddit)
 -- ============================================================================
 
 -- Telegram Sources (18 crypto channels) - matching local database
