@@ -560,26 +560,54 @@ ON CONFLICT (account_id) DO UPDATE SET
     priority = EXCLUDED.priority,
     enabled = EXCLUDED.enabled;
 
--- Reddit Sources (15 subreddits) - matching local database
+-- Reddit Sources (40+ subreddits) - comprehensive crypto sentiment
 INSERT INTO reddit_sources (subreddit, asset, role, enabled, max_posts_per_run, priority) VALUES
-    -- Primary (Priority 5-6)
-    ('CryptoTechnology', 'BTC', 'technical', TRUE, 50, 6),
+    -- 1. NEWS & GENERAL DISCUSSION (Priority 5-6)
+    ('CryptoCurrency', 'MULTI', 'news', TRUE, 100, 6),
+    ('CryptoMarkets', 'MULTI', 'market', TRUE, 80, 6),
+    ('Altcoin', 'MULTI', 'discussion', TRUE, 50, 5),
+    ('CryptoMoonShots', 'MULTI', 'speculation', TRUE, 40, 5),
+    -- 2. COIN-SPECIFIC (Priority 5)
     ('Bitcoin', 'BTC', 'discussion', TRUE, 100, 5),
-    ('BitcoinMarkets', 'BTC', 'market', TRUE, 100, 5),
-    ('ethfinance', 'ETH', 'discussion', TRUE, 50, 5),
-    ('CryptoCurrencyTrading', 'BTC', 'trading', TRUE, 40, 5),
-    -- Secondary (Priority 4)
-    ('CryptoCurrency', 'BTC', 'discussion', TRUE, 100, 4),
-    ('defi', 'BTC', 'discussion', TRUE, 30, 4),
-    ('BitcoinMining', 'BTC', 'mining', TRUE, 20, 4),
-    -- Others (Priority 2-3)
-    ('btc', 'BTC', 'discussion', TRUE, 50, 3),
-    ('SatoshiStreetBets', 'BTC', 'trading', TRUE, 30, 3),
-    ('CryptoMarkets', 'BTC', 'market', TRUE, 50, 3),
+    ('Ethereum', 'ETH', 'discussion', TRUE, 80, 5),
+    ('Cardano', 'ADA', 'discussion', TRUE, 50, 5),
+    ('Dogecoin', 'DOGE', 'discussion', TRUE, 50, 5),
+    ('Solana', 'SOL', 'discussion', TRUE, 50, 5),
+    ('XRP', 'XRP', 'discussion', TRUE, 50, 5),
+    ('binance', 'BNB', 'discussion', TRUE, 40, 5),
+    ('Tronix', 'TRX', 'discussion', TRUE, 30, 5),
+    ('Pepecoin', 'PEPE', 'discussion', TRUE, 30, 5),
+    -- 3. TRADING & MARKET TRENDS (Priority 4-5)
+    ('CryptoTrading', 'MULTI', 'trading', TRUE, 50, 5),
+    ('DayTradingCrypto', 'MULTI', 'trading', TRUE, 40, 4),
+    ('LongTermCrypto', 'MULTI', 'investment', TRUE, 30, 4),
+    ('CryptoSignals', 'MULTI', 'signals', TRUE, 30, 4),
+    ('BitcoinMarkets', 'BTC', 'market', TRUE, 80, 5),
+    ('ethtrader', 'ETH', 'trading', TRUE, 50, 4),
+    ('ethfinance', 'ETH', 'finance', TRUE, 50, 4),
+    ('CryptoCurrencyTrading', 'MULTI', 'trading', TRUE, 40, 4),
+    ('SatoshiStreetBets', 'MULTI', 'speculation', TRUE, 40, 4),
+    -- 4. ECOSYSTEM & TECHNICAL (Priority 3-4)
+    ('DeFi', 'MULTI', 'defi', TRUE, 50, 4),
+    ('NFT', 'MULTI', 'nft', TRUE, 40, 3),
+    ('CryptoTechnology', 'MULTI', 'technical', TRUE, 40, 4),
+    ('Blockchain', 'MULTI', 'technical', TRUE, 30, 3),
+    ('defi', 'MULTI', 'defi', TRUE, 40, 4),
+    -- 5. LEARNING & SUPPORT (Priority 2-3)
     ('BitcoinBeginners', 'BTC', 'education', TRUE, 30, 3),
+    ('CryptoBeginners', 'MULTI', 'education', TRUE, 30, 3),
+    ('CryptoApps', 'MULTI', 'apps', TRUE, 20, 2),
+    -- Additional
+    ('btc', 'BTC', 'discussion', TRUE, 50, 3),
+    ('BitcoinMining', 'BTC', 'mining', TRUE, 20, 3),
     ('Bitcoincash', 'BCH', 'discussion', TRUE, 20, 2),
-    ('CryptoMoonShots', 'BTC', 'speculation', TRUE, 20, 2),
-    ('altcoin', 'BTC', 'discussion', TRUE, 20, 2)
+    ('litecoin', 'LTC', 'discussion', TRUE, 30, 3),
+    ('Monero', 'XMR', 'discussion', TRUE, 30, 3),
+    ('Chainlink', 'LINK', 'discussion', TRUE, 30, 3),
+    ('Polkadot', 'DOT', 'discussion', TRUE, 30, 3),
+    ('Avalanche', 'AVAX', 'discussion', TRUE, 30, 3),
+    ('cosmosnetwork', 'ATOM', 'discussion', TRUE, 30, 3),
+    ('maticnetwork', 'MATIC', 'discussion', TRUE, 30, 3)
 ON CONFLICT (subreddit) DO NOTHING;
 
 EOSQL

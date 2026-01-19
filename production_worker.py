@@ -634,12 +634,39 @@ class RedditSourceCollector(SourceCollector):
     def __init__(self, subreddits: Optional[List[str]] = None):
         super().__init__("reddit")
         # Get subreddits from database or use defaults
-        self.subreddits = subreddits or [
-            "bitcoin", "cryptocurrency", "bitcoinmarkets", 
-            "cryptomarkets", "ethtrader"
-        ]
+        self.subreddits = subreddits or self._load_subreddits_from_db()
         self.crawler = RedditCrawler(subreddits=self.subreddits)
-        logger.info(f"Reddit collector initialized with subreddits: {self.subreddits}")
+        logger.info(f"Reddit collector initialized with {len(self.subreddits)} subreddits: {self.subreddits[:10]}...")
+    
+    def _load_subreddits_from_db(self) -> List[str]:
+        """Load enabled subreddits from database, ordered by priority."""
+        default_subreddits = [
+            "bitcoin", "cryptocurrency", "cryptomarkets", 
+            "ethereum", "bitcoinmarkets", "defi", "altcoin",
+            "cryptotrading", "cardano", "dogecoin", "solana"
+        ]
+        try:
+            import psycopg2
+            from db_config import DB_CONFIG
+            conn = psycopg2.connect(**DB_CONFIG)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT subreddit FROM reddit_sources 
+                WHERE enabled = TRUE 
+                ORDER BY priority DESC, subreddit
+            """)
+            subreddits = [row[0] for row in cur.fetchall()]
+            cur.close()
+            conn.close()
+            if subreddits:
+                logger.info(f"[reddit] Loaded {len(subreddits)} subreddits from database")
+                return subreddits
+            else:
+                logger.warning("[reddit] No subreddits in database, using defaults")
+                return default_subreddits
+        except Exception as e:
+            logger.warning(f"[reddit] Failed to load subreddits from DB: {e}, using defaults")
+            return default_subreddits
     
     def collect(self, since: Optional[datetime]) -> List[dict]:
         """Collect posts from Reddit."""
