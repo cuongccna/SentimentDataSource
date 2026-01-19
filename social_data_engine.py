@@ -241,11 +241,15 @@ class TwitterCollector(BaseCollector):
         if engagement_weight is None or author_weight is None:
             return None
         
+        # Detect asset from text dynamically
+        text = record["text"]
+        detected_asset = detect_asset_from_text(text) or "BTC"
+        
         return NormalizedRecord(
             source="twitter",
-            asset="BTC",
+            asset=detected_asset,
             timestamp=record["timestamp"],
-            text=record["text"],
+            text=text,
             engagement_weight=engagement_weight,
             author_weight=author_weight,
             velocity=velocity,
@@ -359,9 +363,12 @@ class RedditCollector(BaseCollector):
         # Get text from available fields
         text = record.get("text") or record.get("body") or record.get("title")
         
+        # Detect asset from text dynamically
+        detected_asset = detect_asset_from_text(text) or "BTC"
+        
         return NormalizedRecord(
             source="reddit",
-            asset="BTC",
+            asset=detected_asset,
             timestamp=record["timestamp"],
             text=text,
             engagement_weight=engagement_weight,
@@ -468,11 +475,15 @@ class TelegramCollector(BaseCollector):
             window_id = record.get("channel_id") or record.get("group_id")
             manipulation_flag = self.check_manipulation(record["text"], window_id)
         
+        # Detect asset from text dynamically
+        text = record["text"]
+        detected_asset = detect_asset_from_text(text) or "BTC"
+        
         return NormalizedRecord(
             source="telegram",
-            asset="BTC",
+            asset=detected_asset,
             timestamp=record["timestamp"],
-            text=record["text"],
+            text=text,
             engagement_weight=None,  # Telegram has no engagement metrics
             author_weight=None,  # Telegram has no author weight
             velocity=velocity,

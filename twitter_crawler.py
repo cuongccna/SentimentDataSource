@@ -22,6 +22,9 @@ from dataclasses import dataclass, field
 from collections import deque
 from abc import ABC, abstractmethod
 
+# Asset detection from database
+from asset_config import detect_asset as detect_asset_from_text
+
 
 # SOURCE RELIABILITY (FIXED - DO NOT CHANGE)
 SOURCE_RELIABILITY = 0.5
@@ -535,9 +538,12 @@ class TwitterCrawler:
         author_weight = calculate_author_weight(followers_count)
         velocity = self.mention_tracker.compute_velocity(timestamp)
         
+        # Detect asset from text dynamically
+        detected_asset = detect_asset_from_text(text) or "BTC"
+        
         return NormalizedTwitterRecord(
             source="twitter",
-            asset="BTC",
+            asset=detected_asset,
             timestamp=timestamp_to_iso(timestamp),
             text=text,
             engagement_weight=engagement_weight,
