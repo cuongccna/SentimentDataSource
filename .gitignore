@@ -30,3 +30,5 @@ build/
 *.egg-info/
 .env.example
 .env.production
+telegram_session.session
+telegram_session.session-journal

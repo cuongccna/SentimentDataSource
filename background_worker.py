@@ -798,11 +798,11 @@ class PipelineExecutor:
                 self.metrics.record_dropped(source)
                 return False
             
-            # Log successful insert with asset info
-            logger.info(f"[{source}] ✅ Inserted #{raw_id} | Asset: {detected_asset} | {text[:60]}...")
+            # Log at debug level to reduce spam
+            logger.debug(f"[{source}] Inserted #{raw_id} | {detected_asset}")
                 
         except Exception as e:
-            logger.error(f"[{source}] Insert raw exception: {e}")
+            logger.debug(f"[{source}] Insert raw exception: {e}")
             self.metrics.record_error(PipelineStage.INSERT_RAW)
             self.metrics.record_dropped(source)
             return False
@@ -1081,7 +1081,8 @@ class SourceLoop:
             logger.debug(f"[{self.source}] No events collected")
             return
         
-        logger.info(f"[{self.source}] Collected {len(events)} events")
+        # Log at debug, summary will be logged at end
+        logger.debug(f"[{self.source}] Processing {len(events)} events")
         
         # Track latest event time
         latest_event_time = since

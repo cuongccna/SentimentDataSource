@@ -225,9 +225,9 @@ class PostgreSQLDatabase(DatabaseInterface):
             
             result = cursor.fetchone()
             self.conn.commit()
-            # Log successful insert with asset info
-            text_preview = text[:60].replace('\n', ' ') if text else ""
-            logger.info(f"[{source}] Inserted #{result[0]} | Asset: {asset} | {text_preview}...")
+            # Only log at debug level to reduce log spam
+            text_preview = text[:40].replace('\n', ' ') if text else ""
+            logger.debug(f"[{source}] Inserted #{result[0]} | {asset} | {text_preview}")
             return str(result[0]) if result else None
             
         except Exception as e:
@@ -674,9 +674,7 @@ class RedditSourceCollector(SourceCollector):
         
         for subreddit in self.subreddits:
             try:
-                logger.info(f"[reddit] Fetching r/{subreddit}...")
-                
-                # Use crawler to fetch posts - use post_limit instead of limit
+                # Fetch posts (no per-subreddit log to reduce spam)
                 records = self.crawler.crawl_subreddit(subreddit, post_limit=10)
                 
                 for record in records:
@@ -706,13 +704,14 @@ class RedditSourceCollector(SourceCollector):
                     }
                     all_records.append(event)
                 
-                logger.info(f"[reddit] Got {len(records)} posts from r/{subreddit}")
+                logger.debug(f"[reddit] r/{subreddit}: {len(records)} posts")
                 
             except Exception as e:
-                logger.error(f"[reddit] Failed to fetch r/{subreddit}: {e}")
+                logger.debug(f"[reddit] r/{subreddit} failed: {e}")
                 continue
         
-        logger.info(f"[reddit] Total collected: {len(all_records)} records")
+        # Summary log only
+        logger.info(f"[reddit] 📊 {len(all_records)} posts from {len(self.subreddits)} subs")
         return all_records
 
 
@@ -827,7 +826,7 @@ class TwitterSourceCollector(SourceCollector):
         """Rotate to the next batch of accounts."""
         self._batch_index += 1
         self.accounts = self._get_next_batch()
-        logger.info(f"[twitter] Rotated to batch {self._batch_index}: {self.accounts}")
+        logger.debug(f"[twitter] Rotated to batch {self._batch_index}: {self.accounts}")
     
     def _load_accounts_from_db(self) -> List[str]:
         """Load enabled Twitter accounts from database."""
@@ -998,7 +997,7 @@ class TwitterSourceCollector(SourceCollector):
                 self._collect_async(limit_per_account=10)
             )
             
-            logger.info(f"[twitter] Collected {len(all_tweets)} BTC tweets from batch {self._batch_index}")
+            logger.debug(f"[twitter] Batch {self._batch_index}: {len(all_tweets)} tweets")
             
         except Exception as e:
             logger.error(f"[twitter] Collection failed: {e}")
@@ -1256,22 +1255,22 @@ class TelegramSourceCollector(SourceCollector):
                 
                 if dialog:
                     try:
-                        logger.info(f"[telegram] Fetching from {dialog.name} (configured as {channel_name})...")
                         messages = self.loop.run_until_complete(
                             self._fetch_messages(dialog, limit=20)
                         )
                         all_messages.extend(messages)
-                        logger.info(f"[telegram] Got {len(messages)} messages from {dialog.name}")
+                        logger.debug(f"[telegram] {dialog.name}: {len(messages)} msgs")
                     except Exception as e:
-                        logger.error(f"[telegram] Error fetching {dialog.name}: {e}")
+                        logger.debug(f"[telegram] {dialog.name} error: {e}")
                 else:
-                    logger.warning(f"[telegram] Channel not found: {channel_name} ({channel_id})")
-                    logger.warning(f"[telegram] Make sure you've joined this channel/group")
+                    # Only log at debug to reduce spam for missing channels
+                    logger.debug(f"[telegram] Not found: {channel_name}")
             
         except Exception as e:
             logger.error(f"[telegram] Collection error: {e}")
         
-        logger.info(f"[telegram] Total collected: {len(all_messages)} messages")
+        # Summary log only
+        logger.info(f"[telegram] 📊 {len(all_messages)} msgs from {len(self.configured_channels)} channels")
         return all_messages
     
     async def _get_crypto_channels(self, limit: int = 10) -> List:
