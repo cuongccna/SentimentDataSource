@@ -20,12 +20,16 @@ from typing import Optional
 from dataclasses import dataclass, field
 from collections import deque
 
+# Import asset config for dynamic asset detection
+from asset_config import get_asset_config, detect_asset as detect_asset_from_text, contains_tracked_asset
+
 
 # SOURCE RELIABILITY (FIXED)
 SOURCE_RELIABILITY = 0.7
 
-# ASSET FILTER PATTERNS (MANDATORY)
-ASSET_PATTERNS = [
+# LEGACY ASSET FILTER PATTERNS (fallback only)
+# Now uses asset_config module for dynamic asset detection
+LEGACY_ASSET_PATTERNS = [
     re.compile(r'\$BTC\b', re.IGNORECASE),
     re.compile(r'#BTC\b', re.IGNORECASE),
     re.compile(r'\bbitcoin\b', re.IGNORECASE)
@@ -158,17 +162,22 @@ class MentionTracker:
 
 def contains_asset_keyword(text: str) -> bool:
     """
-    Check if text contains at least one of:
-    - "$BTC"
-    - "#BTC"
-    - "bitcoin" (case-insensitive)
+    Check if text contains any tracked asset keyword.
+    Now uses asset_config module to load keywords from database.
+    Supports: BTC, ETH, SOL, XRP, BNB, ADA, DOGE, PEPE, TRX, USDT, USDC, etc.
     """
     if not text:
         return False
-    for pattern in ASSET_PATTERNS:
-        if pattern.search(text):
-            return True
-    return False
+    
+    # Use asset_config module (loads from database)
+    try:
+        return contains_tracked_asset(text)
+    except Exception:
+        # Fallback to legacy patterns if database unavailable
+        for pattern in LEGACY_ASSET_PATTERNS:
+            if pattern.search(text):
+                return True
+        return False
 
 
 def safe_log(value: float) -> float:
@@ -472,9 +481,12 @@ class RedditCrawler:
         subreddit = post_data.get("subreddit", "")
         author = post_data.get("author", "")
         
+        # Detect asset from text dynamically (from database)
+        detected_asset = detect_asset_from_text(text) or "BTC"
+        
         return NormalizedRedditRecord(
             source="reddit",
-            asset="BTC",
+            asset=detected_asset,
             timestamp=timestamp_to_iso(created_utc),
             text=text,
             engagement_weight=engagement_weight,
@@ -534,9 +546,12 @@ class RedditCrawler:
         subreddit = comment_data.get("subreddit", "")
         author = comment_data.get("author", "")
         
+        # Detect asset from text dynamically (from database)
+        detected_asset = detect_asset_from_text(text) or "BTC"
+        
         return NormalizedRedditRecord(
             source="reddit",
-            asset="BTC",
+            asset=detected_asset,
             timestamp=timestamp_to_iso(created_utc),
             text=text,
             engagement_weight=engagement_weight,
