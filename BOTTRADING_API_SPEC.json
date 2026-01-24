@@ -1,0 +1,325 @@
+{
+  "service_name": "SentimentDataSource",
+  "version": "1.0.0",
+  "description": "Social Sentiment Data Service for Crypto BotTrading - Risk Control Only",
+  
+  "base_url": "http://localhost:8000",
+  "internal_url": "http://127.0.0.1:8000",
+  "note": "Both services run on same VPS - use internal URL for lower latency",
+  
+  "auth_method": "none",
+  "auth_note": "No authentication required for internal VPS communication. Add API key if exposed externally.",
+  
+  "endpoints": {
+    "social_context": {
+      "path": "/api/v1/social/context",
+      "method": "POST",
+      "description": "Get aggregated social context (sentiment, risk indicators, data quality) for a time window",
+      "use_case": "Primary endpoint for BotTrading risk control decisions"
+    },
+    "sentiment_analyze": {
+      "path": "/api/v1/sentiment/analyze",
+      "method": "POST",
+      "description": "Analyze raw social records for sentiment",
+      "use_case": "Process raw social data through sentiment pipeline"
+    },
+    "health": {
+      "path": "/health",
+      "method": "GET",
+      "description": "Health check endpoint"
+    }
+  },
+
+  "endpoint_details": {
+    "social_context": {
+      "endpoint": "POST /api/v1/social/context",
+      "content_type": "application/json",
+      "request_schema": {
+        "asset": "string (required) - Asset symbol, e.g., 'BTC', 'ETH'",
+        "since": "string (required) - Start time ISO-8601 UTC with second precision",
+        "until": "string (required) - End time ISO-8601 UTC with second precision",
+        "sources": "array[string] (required) - List of sources: 'twitter', 'reddit', 'telegram'"
+      },
+      "request_example": {
+        "asset": "BTC",
+        "since": "2026-01-24T15:00:00Z",
+        "until": "2026-01-24T15:05:00Z",
+        "sources": ["twitter", "reddit", "telegram"]
+      },
+      "response_codes": {
+        "200": "Social context successfully returned",
+        "204": "No social events in requested window",
+        "400": "Invalid request schema or time window",
+        "422": "Data exists but insufficient for aggregation",
+        "500": "Internal server error"
+      },
+      "response_example_200": {
+        "meta": {
+          "asset": "BTC",
+          "window": {
+            "since": "2026-01-24T15:00:00Z",
+            "until": "2026-01-24T15:05:00Z"
+          },
+          "generated_at": "2026-01-24T15:05:01Z"
+        },
+        "social_context": {
+          "sentiment": {
+            "label": 1,
+            "confidence": 0.78
+          },
+          "risk_indicators": {
+            "sentiment_reliability": "normal",
+            "fear_greed_index": 65,
+            "fear_greed_zone": "normal",
+            "social_overheat": false,
+            "panic_risk": false,
+            "fomo_risk": true
+          },
+          "data_quality": {
+            "overall": "healthy",
+            "availability": "ok",
+            "time_integrity": "ok",
+            "volume": "normal",
+            "source_balance": "normal",
+            "anomaly_frequency": "normal"
+          }
+        }
+      },
+      "constraints": {
+        "min_window_seconds": 30,
+        "max_window_seconds": 300,
+        "valid_sources": ["twitter", "reddit", "telegram"],
+        "timestamp_precision": "seconds (no microseconds)"
+      }
+    },
+
+    "sentiment_analyze": {
+      "endpoint": "POST /api/v1/sentiment/analyze",
+      "content_type": "application/json",
+      "request_schema": {
+        "records": "array[object] (required) - Array of social records to analyze"
+      },
+      "record_schema": {
+        "source": "string (required) - 'twitter', 'reddit', 'telegram'",
+        "asset": "string (required) - Asset symbol, e.g., 'BTC'",
+        "timestamp": "string (required) - ISO-8601 UTC timestamp",
+        "text": "string (required) - Social post content",
+        "metrics": {
+          "engagement_weight": "float (optional) - log(1 + likes + retweets)",
+          "author_weight": "float (optional) - log(1 + followers)",
+          "velocity": "float (optional) - mentions_1min / avg_mentions_60min"
+        }
+      },
+      "request_example": {
+        "records": [
+          {
+            "source": "twitter",
+            "asset": "BTC",
+            "timestamp": "2026-01-24T15:00:00Z",
+            "text": "Bitcoin looking bullish! 🚀 Breaking resistance at 105k",
+            "metrics": {
+              "engagement_weight": 5.2,
+              "author_weight": 8.1,
+              "velocity": 1.5
+            }
+          }
+        ]
+      },
+      "response_codes": {
+        "200": "At least one valid record processed",
+        "400": "Invalid request structure",
+        "422": "All records dropped (validation failed)",
+        "500": "Internal server error"
+      },
+      "response_example_200": {
+        "meta": {
+          "asset": "BTC",
+          "record_received": 1,
+          "record_processed": 1,
+          "record_dropped": 0,
+          "timestamp": "2026-01-24T15:00:05Z"
+        },
+        "results": [
+          {
+            "source": "twitter",
+            "asset": "BTC",
+            "timestamp": "2026-01-24T15:00:00Z",
+            "text": "Bitcoin looking bullish! 🚀 Breaking resistance at 105k",
+            "sentiment": {
+              "label": 1,
+              "confidence": 0.85,
+              "method": "keyword"
+            },
+            "metrics": {
+              "engagement_weight": 5.2,
+              "author_weight": 8.1,
+              "velocity": 1.5
+            },
+            "source_reliability": 0.5
+          }
+        ]
+      },
+      "response_example_422_fallback": {
+        "meta": {
+          "asset": "BTC",
+          "record_received": 1,
+          "record_processed": 0,
+          "record_dropped": 1,
+          "timestamp": "2026-01-24T15:00:05Z"
+        },
+        "results": [],
+        "risk_flag": {
+          "sentiment_unavailable": true,
+          "action": "BLOCK_TRADING"
+        }
+      }
+    }
+  },
+
+  "data_schemas": {
+    "sentiment": {
+      "label": {
+        "type": "integer",
+        "values": {
+          "-1": "BEARISH",
+          "0": "NEUTRAL",
+          "1": "BULLISH"
+        }
+      },
+      "confidence": {
+        "type": "float",
+        "range": "[0.0, 1.0]",
+        "description": "Confidence score of sentiment classification"
+      }
+    },
+    
+    "risk_indicators": {
+      "sentiment_reliability": {
+        "type": "string",
+        "values": ["low", "normal"],
+        "description": "'low' when social_overheat or panic_risk is true"
+      },
+      "fear_greed_index": {
+        "type": "integer|null",
+        "range": "[0, 100]",
+        "description": "Fear & Greed Index (0=Extreme Fear, 100=Extreme Greed)"
+      },
+      "fear_greed_zone": {
+        "type": "string",
+        "values": ["extreme_fear", "extreme_greed", "normal", "unknown"],
+        "thresholds": {
+          "extreme_fear": "index < 20",
+          "extreme_greed": "index > 80",
+          "normal": "20 <= index <= 80"
+        }
+      },
+      "social_overheat": {
+        "type": "boolean",
+        "description": "True when social volume spikes abnormally"
+      },
+      "panic_risk": {
+        "type": "boolean",
+        "description": "True when negative sentiment velocity is high"
+      },
+      "fomo_risk": {
+        "type": "boolean",
+        "description": "True when positive sentiment velocity is extremely high"
+      }
+    },
+
+    "data_quality": {
+      "overall": {
+        "type": "string",
+        "values": ["healthy", "degraded", "critical"],
+        "description": "Worst state among all quality dimensions"
+      },
+      "availability": {
+        "type": "string",
+        "values": ["ok", "degraded", "down"],
+        "description": "Data source availability status"
+      },
+      "time_integrity": {
+        "type": "string",
+        "values": ["ok", "unstable", "critical"],
+        "description": "Timestamp consistency across sources"
+      },
+      "volume": {
+        "type": "string",
+        "values": ["normal", "abnormally_low", "abnormally_high"]
+      },
+      "source_balance": {
+        "type": "string",
+        "values": ["normal", "imbalanced"],
+        "description": "Balance of data across sources"
+      },
+      "anomaly_frequency": {
+        "type": "string",
+        "values": ["normal", "persistent"]
+      }
+    }
+  },
+
+  "source_reliability": {
+    "twitter": 0.5,
+    "reddit": 0.7,
+    "telegram": 0.3,
+    "note": "Used for weighted sentiment aggregation"
+  },
+
+  "supported_assets": [
+    "BTC", "ETH", "SOL", "XRP", "DOGE", 
+    "ADA", "AVAX", "LINK", "DOT", "MATIC", "TRUMP"
+  ],
+
+  "collection_intervals": {
+    "telegram": "15 minutes",
+    "twitter": "30 minutes", 
+    "reddit": "10 minutes",
+    "note": "Data is collected periodically, not real-time streaming"
+  },
+
+  "integration_examples": {
+    "python": {
+      "get_social_context": "import requests\n\nresponse = requests.post(\n    'http://127.0.0.1:8000/api/v1/social/context',\n    json={\n        'asset': 'BTC',\n        'since': '2026-01-24T15:00:00Z',\n        'until': '2026-01-24T15:05:00Z',\n        'sources': ['twitter', 'reddit', 'telegram']\n    }\n)\n\nif response.status_code == 200:\n    data = response.json()\n    sentiment = data['social_context']['sentiment']\n    risk = data['social_context']['risk_indicators']\n    \n    # BotTrading decision logic\n    if risk['panic_risk'] or risk['social_overheat']:\n        print('BLOCK TRADING - High risk detected')\n    elif sentiment['label'] == 1 and sentiment['confidence'] > 0.7:\n        print('Bullish sentiment with high confidence')"
+    },
+    "curl": {
+      "get_social_context": "curl -X POST http://127.0.0.1:8000/api/v1/social/context \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"asset\": \"BTC\",\n    \"since\": \"2026-01-24T15:00:00Z\",\n    \"until\": \"2026-01-24T15:05:00Z\",\n    \"sources\": [\"twitter\", \"reddit\", \"telegram\"]\n  }'"
+    }
+  },
+
+  "bottrading_integration": {
+    "recommended_flow": [
+      "1. Before opening position: Call /api/v1/social/context",
+      "2. Check risk_indicators.panic_risk and social_overheat",
+      "3. If either is true → BLOCK TRADING",
+      "4. Check data_quality.overall",
+      "5. If 'critical' → BLOCK TRADING or reduce position size",
+      "6. Use sentiment.label and confidence for risk adjustment"
+    ],
+    "risk_blocking_conditions": {
+      "block_trading": [
+        "risk_indicators.panic_risk == true",
+        "risk_indicators.social_overheat == true",
+        "data_quality.overall == 'critical'",
+        "HTTP 204 (no data)",
+        "HTTP 422 (insufficient data)"
+      ],
+      "reduce_position_size": [
+        "risk_indicators.sentiment_reliability == 'low'",
+        "data_quality.overall == 'degraded'",
+        "risk_indicators.fomo_risk == true"
+      ]
+    }
+  },
+
+  "service_info": {
+    "framework": "FastAPI + Flask",
+    "database": "PostgreSQL",
+    "data_sources": ["Twitter (Syndication API)", "Reddit (Public JSON)", "Telegram (Telethon)"],
+    "process_manager": "PM2",
+    "ports": {
+      "fastapi_social_context": 8000,
+      "flask_sentiment_analyze": 5000
+    }
+  }
+}
