@@ -13,6 +13,7 @@ import re
 import math
 import time
 import json
+import random
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone, timedelta
@@ -233,10 +234,12 @@ class RedditCrawler:
         self.last_request_time = 0.0
     
     def _rate_limit(self):
-        """Enforce rate limiting between requests."""
+        """Enforce rate limiting between requests with random jitter."""
         elapsed = time.time() - self.last_request_time
-        if elapsed < REQUEST_DELAY_SECONDS:
-            time.sleep(REQUEST_DELAY_SECONDS - elapsed)
+        # ANTI-BAN: Add random jitter (2-4 seconds) instead of fixed delay
+        min_delay = REQUEST_DELAY_SECONDS + random.uniform(0.5, 2.0)
+        if elapsed < min_delay:
+            time.sleep(min_delay - elapsed)
         self.last_request_time = time.time()
     
     def _fetch_json(self, url: str) -> Optional[dict]:

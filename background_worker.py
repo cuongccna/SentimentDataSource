@@ -49,11 +49,19 @@ logger = logging.getLogger("background_worker")
 # CONSTANTS
 # =============================================================================
 
-# Scheduling intervals (seconds)
-# Twitter: 30 min interval due to Syndication API rate limits
-TWITTER_INTERVAL = 1800  # 30 minutes (rate limit sensitive)
-TELEGRAM_INTERVAL = 20
-REDDIT_INTERVAL = 300  # 5 minutes
+# Scheduling intervals (seconds) - SAFE VALUES to avoid platform bans
+# See rate_limiter.py for detailed platform guidelines
+#
+# CRITICAL: These values are MINIMUM safe intervals
+# Going lower WILL result in account bans!
+#
+# Telegram: 15 min - Telegram is VERY aggressive about banning
+# Twitter: 30 min - Syndication API has strict limits
+# Reddit: 10 min - Most lenient but still needs respect
+
+TWITTER_INTERVAL = 1800   # 30 minutes (rate limit sensitive)
+TELEGRAM_INTERVAL = 900   # 15 minutes (was 20s - caused account ban!)
+REDDIT_INTERVAL = 600     # 10 minutes
 
 # Source reliability weights
 SOURCE_RELIABILITY = {

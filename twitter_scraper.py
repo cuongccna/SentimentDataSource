@@ -24,6 +24,7 @@ import json
 import asyncio
 import hashlib
 import math
+import random
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any, Callable
 from dataclasses import dataclass
@@ -523,8 +524,9 @@ class TwitterSyndicationScraper:
                 logger.info("Rate limited detected, stopping further scraping for this batch")
                 continue
             
-            # Rate limiting between users
-            await asyncio.sleep(1.5)
+            # ANTI-BAN: Random delay between users (3-7 seconds)
+            delay = random.uniform(3.0, 7.0)
+            await asyncio.sleep(delay)
         
         return results
 

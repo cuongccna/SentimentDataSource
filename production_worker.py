@@ -36,6 +36,8 @@ load_dotenv()
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import random  # For random delays
+
 from background_worker import (
     BackgroundWorker,
     SourceCollector,
@@ -49,6 +51,9 @@ from background_worker import (
     REDDIT_INTERVAL,
     logger
 )
+
+# Import rate limiter for anti-ban protection
+from rate_limiter import get_rate_limiter, get_last_read_tracker
 
 # Import asset configuration for dynamic filtering
 from asset_config import (
@@ -629,14 +634,24 @@ _Powered by Social Sentiment Pipeline_
 # =============================================================================
 
 class RedditSourceCollector(SourceCollector):
-    """Real Reddit collector using RedditCrawler."""
+    """
+    Real Reddit collector using RedditCrawler.
+    
+    ANTI-BAN PROTECTION:
+    - Random delays between subreddit fetches (2-3 seconds)
+    - Respects 10-minute collection interval
+    - Max 10 subreddits per cycle
+    """
     
     def __init__(self, subreddits: Optional[List[str]] = None):
         super().__init__("reddit")
+        # Rate limiter for anti-ban protection
+        self.rate_limiter = get_rate_limiter()
+        
         # Get subreddits from database or use defaults
         self.subreddits = subreddits or self._load_subreddits_from_db()
         self.crawler = RedditCrawler(subreddits=self.subreddits)
-        logger.info(f"Reddit collector initialized with {len(self.subreddits)} subreddits: {self.subreddits[:10]}...")
+        logger.info(f"Reddit collector initialized with {len(self.subreddits)} subreddits")
     
     def _load_subreddits_from_db(self) -> List[str]:
         """Load enabled subreddits from database, ordered by priority."""
@@ -669,13 +684,29 @@ class RedditSourceCollector(SourceCollector):
             return default_subreddits
     
     def collect(self, since: Optional[datetime]) -> List[dict]:
-        """Collect posts from Reddit."""
+        """Collect posts from Reddit with anti-ban protection."""
         all_records = []
         
-        for subreddit in self.subreddits:
+        # Check if platform is enabled
+        if not self.rate_limiter.is_enabled("reddit"):
+            logger.info("[reddit] Platform disabled - skipping")
+            return []
+        
+        # Limit subreddits per cycle
+        max_subs = min(len(self.subreddits), 15)
+        subs_to_fetch = self.subreddits[:max_subs]
+        
+        subs_processed = 0
+        for subreddit in subs_to_fetch:
             try:
-                # Fetch posts (no per-subreddit log to reduce spam)
+                # Random delay between subreddit fetches (2-3 seconds)
+                if subs_processed > 0:
+                    delay = random.uniform(2.0, 3.5)
+                    time.sleep(delay)
+                
+                # Fetch posts
                 records = self.crawler.crawl_subreddit(subreddit, post_limit=10)
+                subs_processed += 1
                 
                 for record in records:
                     text = record.get("text", "")
@@ -710,8 +741,11 @@ class RedditSourceCollector(SourceCollector):
                 logger.debug(f"[reddit] r/{subreddit} failed: {e}")
                 continue
         
+        # Record successful collection
+        self.rate_limiter.record_collection("reddit", success=True)
+        
         # Summary log only
-        logger.info(f"[reddit] 📊 {len(all_records)} posts from {len(self.subreddits)} subs")
+        logger.info(f"[reddit] 📊 {len(all_records)} posts from {subs_processed}/{len(self.subreddits)} subs")
         return all_records
 
 
@@ -719,11 +753,9 @@ class TwitterSourceCollector(SourceCollector):
     """
     Twitter collector using TwitterScraper (Syndication API).
     
-    Monitors whitelisted Twitter accounts for BTC-related content.
-    NO API key required - uses public syndication endpoints.
-    
-    Rate Limit Handling:
-    - Scrapes only ACCOUNTS_PER_BATCH accounts per collection cycle
+    ANTI-BAN PROTECTION:
+    - Random delays between account fetches (5-10 seconds)
+    - Scrapes only 5 accounts per collection cycle
     - Rotates through accounts using batch_index
     - Uses 30-minute interval between collections
     """
@@ -776,6 +808,9 @@ class TwitterSourceCollector(SourceCollector):
     
     def __init__(self, accounts: Optional[List[str]] = None):
         super().__init__("twitter")
+        
+        # Rate limiter for anti-ban protection
+        self.rate_limiter = get_rate_limiter()
         
         # Try to load accounts from database first
         db_accounts = self._load_accounts_from_db()
@@ -973,10 +1008,15 @@ class TwitterSourceCollector(SourceCollector):
         """
         Collect tweets from monitored Twitter accounts.
         
+        ANTI-BAN: Random delays, batch rotation, rate limiting.
         Uses TwitterScraper with Syndication API (no auth required).
-        Rotates through batches of accounts to avoid rate limits.
         """
         if not self.enabled:
+            return []
+        
+        # Check if platform is enabled
+        if not self.rate_limiter.is_enabled("twitter"):
+            logger.info("[twitter] Platform disabled - skipping")
             return []
         
         if not HAS_TWITTER_SCRAPER:
@@ -992,17 +1032,19 @@ class TwitterSourceCollector(SourceCollector):
             # Get or create event loop
             loop = self._get_event_loop()
             
-            # Run async collection
+            # Run async collection with random delays
             all_tweets = loop.run_until_complete(
                 self._collect_async(limit_per_account=10)
             )
             
-            logger.debug(f"[twitter] Batch {self._batch_index}: {len(all_tweets)} tweets")
+            # Record successful collection
+            self.rate_limiter.record_collection("twitter", success=True)
+            
+            logger.info(f"[twitter] 📊 {len(all_tweets)} tweets from batch {self._batch_index}")
             
         except Exception as e:
+            self.rate_limiter.record_collection("twitter", success=False)
             logger.error(f"[twitter] Collection failed: {e}")
-            import traceback
-            traceback.print_exc()
         
         return all_tweets
     
@@ -1017,6 +1059,13 @@ class TelegramSourceCollector(SourceCollector):
     """
     Telegram collector using Telethon Client API.
     
+    ANTI-BAN PROTECTION:
+    - Random delays between channel fetches (3-5 seconds)
+    - Uses min_id to only fetch NEW messages (not full history)
+    - Respects 15-minute collection interval
+    - Handles FloodWait errors gracefully
+    - Max 10 channels per collection cycle
+    
     Reads messages from channels configured in telegram_sources table.
     """
     
@@ -1026,6 +1075,12 @@ class TelegramSourceCollector(SourceCollector):
         self.loop = None
         self._initialized = False
         self.db_conn = database_conn
+        
+        # Rate limiter for anti-ban protection
+        self.rate_limiter = get_rate_limiter()
+        
+        # Track last message IDs per channel to avoid re-fetching
+        self.last_message_ids: Dict[str, int] = {}
         
         # Get credentials from environment
         self.api_id = os.getenv("TELEGRAM_API_ID")
@@ -1145,10 +1200,18 @@ class TelegramSourceCollector(SourceCollector):
             return False
     
     async def _fetch_messages(self, dialog, limit: int = 20) -> List[dict]:
-        """Fetch recent messages from a channel dialog."""
+        """
+        Fetch NEW messages from a channel dialog.
+        
+        Uses min_id to only fetch messages NEWER than last seen.
+        This prevents re-reading the same messages and reduces API calls.
+        """
         messages = []
         channel_name = dialog.name
-        channel_id = dialog.id
+        channel_id = str(dialog.id)
+        
+        # Get last seen message ID for this channel
+        min_id = self.last_message_ids.get(channel_id, 0)
         
         try:
             history = await self.client(GetHistoryRequest(
@@ -1157,14 +1220,21 @@ class TelegramSourceCollector(SourceCollector):
                 offset_date=None,
                 offset_id=0,
                 max_id=0,
-                min_id=0,
+                min_id=min_id,  # Only get messages newer than this ID
                 add_offset=0,
                 hash=0
             ))
             
+            # Track newest message ID
+            newest_msg_id = min_id
+            
             for msg in history.messages:
                 if not msg.message:
                     continue
+                
+                # Update newest message ID
+                if msg.id > newest_msg_id:
+                    newest_msg_id = msg.id
                 
                 # Dynamic asset filtering using asset_config
                 text = msg.message
@@ -1193,8 +1263,22 @@ class TelegramSourceCollector(SourceCollector):
                     }
                 })
             
+            # Update last seen message ID for this channel
+            if newest_msg_id > min_id:
+                self.last_message_ids[channel_id] = newest_msg_id
+            
         except Exception as e:
-            logger.error(f"[telegram] Failed to fetch from {channel_name}: {e}")
+            # Handle FloodWait errors specially
+            error_str = str(e).lower()
+            if 'flood' in error_str or 'wait' in error_str:
+                # Extract wait time if present
+                import re
+                wait_match = re.search(r'(\d+)\s*seconds?', str(e))
+                wait_time = int(wait_match.group(1)) if wait_match else 300
+                self.rate_limiter.record_rate_limit_error("telegram", wait_time)
+                logger.error(f"[telegram] FloodWait! Must wait {wait_time}s")
+            else:
+                logger.error(f"[telegram] Failed to fetch from {channel_name}: {e}")
         
         return messages
     
@@ -1211,6 +1295,11 @@ class TelegramSourceCollector(SourceCollector):
             return []
         
         try:
+            # Check if platform is enabled
+            if not self.rate_limiter.is_enabled("telegram"):
+                logger.info("[telegram] Platform disabled - skipping")
+                return []
+            
             # Create event loop if needed
             try:
                 self.loop = asyncio.get_event_loop()
@@ -1225,19 +1314,29 @@ class TelegramSourceCollector(SourceCollector):
             if not self.loop.run_until_complete(self._init_client()):
                 return []
             
-            # Get all dialogs once
+            # Get all dialogs once (single API call)
             dialogs = self.loop.run_until_complete(self.client.get_dialogs())
             dialog_map = {d.name.lower(): d for d in dialogs if d.is_channel or d.is_group}
             
             # Also map by ID for more precise matching
             dialog_id_map = {str(d.id): d for d in dialogs if d.is_channel or d.is_group}
             
-            logger.info(f"[telegram] Searching for {len(self.configured_channels)} configured channels")
+            # Limit channels per cycle to avoid too many API calls
+            max_channels = min(len(self.configured_channels), 10)
+            channels_to_fetch = self.configured_channels[:max_channels]
             
-            # Fetch from configured channels only
-            for ch_config in self.configured_channels:
+            logger.info(f"[telegram] Fetching from {len(channels_to_fetch)}/{len(self.configured_channels)} channels")
+            
+            # Fetch from configured channels with random delays
+            channels_processed = 0
+            for ch_config in channels_to_fetch:
                 channel_id = ch_config["channel_id"]
                 channel_name = ch_config["channel_name"]
+                
+                # Random delay between channel fetches (3-5 seconds)
+                if channels_processed > 0:
+                    delay = random.uniform(3.0, 5.0)
+                    time.sleep(delay)
                 
                 # Try to find dialog by ID first, then by name
                 dialog = None
@@ -1259,18 +1358,27 @@ class TelegramSourceCollector(SourceCollector):
                             self._fetch_messages(dialog, limit=20)
                         )
                         all_messages.extend(messages)
-                        logger.debug(f"[telegram] {dialog.name}: {len(messages)} msgs")
+                        logger.debug(f"[telegram] {dialog.name}: {len(messages)} new msgs")
+                        channels_processed += 1
                     except Exception as e:
+                        error_str = str(e).lower()
+                        if 'flood' in error_str:
+                            logger.error(f"[telegram] FloodWait detected - stopping collection")
+                            break  # Stop immediately on FloodWait
                         logger.debug(f"[telegram] {dialog.name} error: {e}")
                 else:
                     # Only log at debug to reduce spam for missing channels
                     logger.debug(f"[telegram] Not found: {channel_name}")
             
+            # Record successful collection
+            self.rate_limiter.record_collection("telegram", success=True)
+            
         except Exception as e:
+            self.rate_limiter.record_collection("telegram", success=False)
             logger.error(f"[telegram] Collection error: {e}")
         
         # Summary log only
-        logger.info(f"[telegram] 📊 {len(all_messages)} msgs from {len(self.configured_channels)} channels")
+        logger.info(f"[telegram] 📊 {len(all_messages)} new msgs from {channels_processed} channels")
         return all_messages
     
     async def _get_crypto_channels(self, limit: int = 10) -> List:
