@@ -22,7 +22,6 @@ Thumbs.db
 # Test outputs
 test_worker_state.json
 output.json
-sample_data.json
 
 # Build
 dist/
