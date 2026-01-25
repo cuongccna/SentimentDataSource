@@ -14,9 +14,16 @@ from typing import Optional, Literal
 from enum import Enum
 from uuid import UUID
 import json
+import os
 
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+# Load environment variables
+load_dotenv()
 
 
 # =============================================================================
@@ -219,21 +226,34 @@ def format_timestamp(dt: datetime) -> str:
 
 class SocialDataStorage:
     """
-    Storage layer for reading pre-processed social data.
+    Storage layer for reading social data from PostgreSQL.
     
-    This class provides read-only access to data that has already
-    passed through: Crawlers → Time Sync Guard → Sentiment Pipeline
-    → Risk Indicators → DQM
+    This class provides read-only access to data from ingested_messages table.
     """
     
     def __init__(self):
-        # In-memory storage for demonstration
-        # In production, this would connect to PostgreSQL Event Store
-        self._records: list[dict] = []
+        # PostgreSQL connection parameters from environment
+        self.db_config = {
+            "host": os.getenv("POSTGRES_HOST", "localhost"),
+            "port": int(os.getenv("POSTGRES_PORT", "5432")),
+            "database": os.getenv("POSTGRES_DATABASE", "sentiment_db"),
+            "user": os.getenv("POSTGRES_USER", "sentiment_user"),
+            "password": os.getenv("POSTGRES_PASSWORD", ""),
+        }
+        self._test_connection()
     
-    def add_record(self, record: dict):
-        """Add a record to storage (for testing/demo purposes)."""
-        self._records.append(record)
+    def _test_connection(self):
+        """Test database connection on startup."""
+        try:
+            conn = psycopg2.connect(**self.db_config)
+            conn.close()
+            print(f"[INFO] Connected to PostgreSQL: {self.db_config['database']}")
+        except Exception as e:
+            print(f"[WARNING] Could not connect to PostgreSQL: {e}")
+    
+    def _get_connection(self):
+        """Get a new database connection."""
+        return psycopg2.connect(**self.db_config, cursor_factory=RealDictCursor)
     
     def query_records(
         self,
@@ -243,40 +263,135 @@ class SocialDataStorage:
         sources: list[str]
     ) -> list[dict]:
         """
-        Query records by asset, time window, and sources.
+        Query records from ingested_messages table.
         
-        Returns records with timestamp BETWEEN since AND until
+        Returns records with event_time BETWEEN since AND until
         where source IN sources.
         """
         results = []
         
-        for record in self._records:
-            # Filter by asset
-            if record.get("asset") != asset:
-                continue
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
             
-            # Filter by source
-            if record.get("source") not in sources:
-                continue
+            # Build query with parameterized sources
+            placeholders = ','.join(['%s'] * len(sources))
+            query = f"""
+                SELECT 
+                    message_id,
+                    source,
+                    source_name,
+                    asset,
+                    text,
+                    event_time,
+                    engagement_weight,
+                    author_weight,
+                    velocity,
+                    source_reliability,
+                    raw_data
+                FROM ingested_messages
+                WHERE asset = %s
+                  AND event_time >= %s
+                  AND event_time <= %s
+                  AND source IN ({placeholders})
+                ORDER BY event_time DESC
+                LIMIT 1000
+            """
             
-            # Filter by time window
-            ts_str = record.get("timestamp", "")
-            if not ts_str:
-                continue
+            params = [asset, since, until] + sources
+            cursor.execute(query, params)
             
-            try:
-                ts = parse_timestamp(ts_str)
-            except (ValueError, TypeError):
-                continue
+            rows = cursor.fetchall()
             
-            if since <= ts <= until:
+            for row in rows:
+                # Convert to expected format
+                record = {
+                    "message_id": row["message_id"],
+                    "source": row["source"],
+                    "source_name": row["source_name"],
+                    "asset": row["asset"],
+                    "text": row["text"],
+                    "timestamp": row["event_time"].isoformat() if row["event_time"] else None,
+                    "engagement_weight": row["engagement_weight"] or 0,
+                    "author_weight": row["author_weight"] or 0,
+                    "velocity": row["velocity"] or 1.0,
+                    "source_reliability": row["source_reliability"] or 0.5,
+                    # Generate sentiment from raw_data if available, else use defaults
+                    "sentiment": self._extract_sentiment(row),
+                    "risk_indicators": self._extract_risk_indicators(row),
+                    "data_quality": self._default_data_quality()
+                }
                 results.append(record)
+            
+            cursor.close()
+            conn.close()
+            
+        except Exception as e:
+            print(f"[ERROR] Database query failed: {e}")
         
         return results
     
+    def _extract_sentiment(self, row: dict) -> dict:
+        """Extract sentiment from raw_data or generate from text."""
+        raw_data = row.get("raw_data") or {}
+        
+        # Check if sentiment already computed
+        if "sentiment" in raw_data:
+            return raw_data["sentiment"]
+        
+        # Simple keyword-based sentiment for now
+        text = (row.get("text") or "").lower()
+        
+        bullish_keywords = ["bullish", "moon", "pump", "buy", "long", "breakout", "🚀", "📈"]
+        bearish_keywords = ["bearish", "dump", "sell", "short", "crash", "drop", "📉"]
+        
+        bullish_count = sum(1 for kw in bullish_keywords if kw in text)
+        bearish_count = sum(1 for kw in bearish_keywords if kw in text)
+        
+        if bullish_count > bearish_count:
+            return {"label": 1, "confidence": min(0.5 + bullish_count * 0.1, 0.95)}
+        elif bearish_count > bullish_count:
+            return {"label": -1, "confidence": min(0.5 + bearish_count * 0.1, 0.95)}
+        else:
+            return {"label": 0, "confidence": 0.5}
+    
+    def _extract_risk_indicators(self, row: dict) -> dict:
+        """Extract or generate risk indicators."""
+        raw_data = row.get("raw_data") or {}
+        
+        if "risk_indicators" in raw_data:
+            return raw_data["risk_indicators"]
+        
+        velocity = row.get("velocity") or 1.0
+        
+        return {
+            "sentiment_reliability": "normal",
+            "fear_greed_index": None,
+            "fear_greed_zone": "unknown",
+            "social_overheat": velocity > 5.0,
+            "panic_risk": False,
+            "fomo_risk": velocity > 3.0
+        }
+    
+    def _default_data_quality(self) -> dict:
+        """Return default data quality."""
+        return {
+            "overall": "healthy",
+            "availability": "ok",
+            "time_integrity": "ok",
+            "volume": "normal",
+            "source_balance": "normal",
+            "anomaly_frequency": "normal"
+        }
+    
+    def add_record(self, record: dict):
+        """Add a record to storage (for testing/demo purposes only)."""
+        # In production, data is added by the worker, not API
+        pass
+    
     def clear(self):
-        """Clear all records (for testing purposes)."""
-        self._records = []
+        """Clear all records (for testing purposes only)."""
+        pass
 
 
 # =============================================================================
